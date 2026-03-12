@@ -2,18 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
-import { cn, pnlColor } from '@/lib/utils';
-
-// Components
-import { Header, LiveBanner, HaltBanner }   from '@/components/Header';
-import { PerformancePanel }                  from '@/components/PerformancePanel';
-import { RiskPanel }                         from '@/components/RiskPanel';
-import { MarketRegimePanel, LatestDecisionPanel } from '@/components/MarketAIPanel';
-import { PositionsPanel }                    from '@/components/PositionsPanel';
-import { IncidentsPanel }                    from '@/components/IncidentsPanel';
-import { SystemStatusPanel, HealthPanel }    from '@/components/SystemHealthPanel';
-import { DecisionsTable, OrdersTable, LifecycleTable } from '@/components/DetailTables';
-import { Card, SectionLabel }                from '@/components/ui';
+import { PanelPerformance } from '@/components/PanelPerformance';
+import { PanelRisk }        from '@/components/PanelRisk';
+import { PanelMarket }      from '@/components/PanelMarket';
+import { PanelAI }          from '@/components/PanelAI';
+import { PanelTrading }     from '@/components/PanelTrading';
+import { PanelSystem }      from '@/components/PanelSystem';
+import { T }                from '@/components/charts';
 
 // ─────────────────────────────────────────────────────────────────────
 // Types
@@ -21,28 +16,28 @@ import { Card, SectionLabel }                from '@/components/ui';
 
 interface DashboardData {
   system: {
-    state: string;
-    mode: string;
-    uptime: number;
-    version: string;
-    haltReason: string | null;
+    state:       string;
+    mode:        string;
+    uptime:      number;
+    version:     string;
+    haltReason:  string | null;
   };
   portfolio: {
-    totalEquity: number;
+    totalEquity:      number;
     availableBalance: number;
-    totalExposure: number;
-    exposurePercent: number;
-    dailyPnl: number;
-    dailyPnlPercent: number;
-    weeklyPnl: number;
+    totalExposure:    number;
+    exposurePercent:  number;
+    dailyPnl:         number;
+    dailyPnlPercent:  number;
+    weeklyPnl:        number;
     totalRealizedPnl: number;
-    dailyTradeCount: number;
-    consecutiveLosses: number;
-    openPositions: Record<string, unknown>[];
-    unrealizedPnl: number;
+    dailyTradeCount:  number;
+    consecutiveLosses:number;
+    openPositions:    Record<string, unknown>[];
+    unrealizedPnl:    number;
   };
   riskLimits: {
-    maxDailyLoss: number;
+    maxDailyLoss:       number;
     dailyLossRemaining: number | null;
     [key: string]: unknown;
   } | null;
@@ -52,18 +47,23 @@ interface DashboardData {
   recentLifecycles: Record<string, unknown>[];
 }
 
-type TabKey = 'decisions' | 'orders' | 'lifecycle' | 'health';
+type TradingSubTab = 'lifecycle' | 'orders';
 
 // ─────────────────────────────────────────────────────────────────────
-// Loading / Error screens
+// Loading / Error
 // ─────────────────────────────────────────────────────────────────────
 
 function LoadingScreen() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-[#0A0A0F]">
+    <div className="flex items-center justify-center w-screen h-screen" style={{ background: T.bg }}>
       <div className="text-center">
-        <div className="w-10 h-10 border-2 border-[#3B82F6] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-[#64748B] text-sm font-mono">Connecting to CryptoBot…</p>
+        <div
+          className="w-8 h-8 rounded-full border-2 border-t-transparent mx-auto mb-3 animate-spin"
+          style={{ borderColor: `${T.info} transparent ${T.info} ${T.info}` }}
+        />
+        <p style={{ color: T.neutral, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+          Connecting to CryptoBot…
+        </p>
       </div>
     </div>
   );
@@ -71,16 +71,32 @@ function LoadingScreen() {
 
 function ErrorScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-[#0A0A0F]">
-      <div className="bg-[#12121A] border border-[#1F1F2A] rounded-xl p-8 max-w-sm w-full text-center mx-4">
-        <div className="w-12 h-12 rounded-full bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-center justify-center mx-auto mb-4">
-          <span className="text-[#EF4444] text-xl">⚠</span>
+    <div className="flex items-center justify-center w-screen h-screen" style={{ background: T.bg }}>
+      <div
+        className="rounded-xl border p-8 max-w-sm w-full text-center mx-4"
+        style={{ borderColor: `${T.loss}30`, background: T.panel }}
+      >
+        <div
+          className="w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-4"
+          style={{ background: `${T.loss}10`, border: `1px solid ${T.loss}30` }}
+        >
+          <span style={{ color: T.loss, fontSize: 18 }}>⚠</span>
         </div>
-        <p className="text-[#EF4444] font-bold mb-2">Connection Error</p>
-        <p className="text-[#64748B] text-sm mb-5 font-mono break-all">{error}</p>
+        <p style={{ color: T.loss, fontWeight: 700, marginBottom: 6, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>
+          Connection Error
+        </p>
+        <p style={{ color: T.neutral, fontSize: 10, marginBottom: 18, fontFamily: 'JetBrains Mono, monospace', wordBreak: 'break-all' }}>
+          {error}
+        </p>
         <button
           onClick={onRetry}
-          className="px-5 py-2 bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/30 rounded-lg text-sm font-semibold hover:bg-[#3B82F6]/25 transition-colors"
+          className="px-5 py-2 rounded-lg text-xs font-semibold transition-colors"
+          style={{
+            background: `${T.info}15`,
+            color: T.info,
+            border: `1px solid ${T.info}30`,
+            fontFamily: 'JetBrains Mono, monospace',
+          }}
         >
           Retry
         </button>
@@ -90,19 +106,133 @@ function ErrorScreen({ error, onRetry }: { error: string; onRetry: () => void })
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Main Page
+// Terminal header bar
+// ─────────────────────────────────────────────────────────────────────
+
+function TerminalHeader({
+  system,
+  lastUpdated,
+  onAction,
+}: {
+  system: DashboardData['system'];
+  lastUpdated: Date | null;
+  onAction: (action: string) => void;
+}) {
+  const stateColor =
+    system.state === 'RUNNING' ? T.profit
+    : system.state === 'HALTED' ? T.loss
+    : T.warning;
+
+  const modeColor =
+    system.mode === 'LIVE' ? T.loss
+    : system.mode === 'DEMO' ? T.warning
+    : T.info;
+
+  return (
+    <div
+      className="flex items-center gap-3 px-3 h-10 flex-shrink-0 border-b select-none"
+      style={{ background: T.panel, borderColor: T.dim }}
+    >
+      {/* Logo */}
+      <span
+        className="text-[11px] font-black tracking-[0.25em] uppercase flex-shrink-0"
+        style={{ fontFamily: 'JetBrains Mono, monospace', color: T.profit, textShadow: `0 0 10px ${T.profit}60` }}
+      >
+        CRYPTOBOT
+      </span>
+
+      {/* Divider */}
+      <div className="w-px h-4 flex-shrink-0" style={{ background: T.dim }} />
+
+      {/* State + mode badges */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <span
+          className="text-[8px] font-black tracking-widest px-1.5 py-0.5 rounded border"
+          style={{ color: stateColor, borderColor: `${stateColor}40`, background: `${stateColor}10`,
+            fontFamily: 'JetBrains Mono, monospace', textShadow: `0 0 5px ${stateColor}` }}
+        >
+          {system.state}
+        </span>
+        <span
+          className="text-[8px] font-black tracking-widest px-1.5 py-0.5 rounded border"
+          style={{ color: modeColor, borderColor: `${modeColor}40`, background: `${modeColor}10`,
+            fontFamily: 'JetBrains Mono, monospace' }}
+        >
+          {system.mode}
+        </span>
+      </div>
+
+      {/* Last update */}
+      <span style={{ color: T.neutral, fontSize: 8, fontFamily: 'JetBrains Mono, monospace', flexShrink: 0 }}>
+        {lastUpdated ? `updated ${lastUpdated.toLocaleTimeString()}` : 'connecting…'}
+      </span>
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Control buttons */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {[
+          { label: 'PAUSE',  action: 'pause',  color: T.warning },
+          { label: 'RESUME', action: 'resume', color: T.profit  },
+          { label: 'KILL',   action: 'kill',   color: T.loss    },
+        ].map(({ label, action, color }) => (
+          <button
+            key={action}
+            onClick={() => onAction(action)}
+            className="px-2.5 py-1 rounded text-[8px] font-black tracking-wider transition-colors"
+            style={{
+              color,
+              border: `1px solid ${color}30`,
+              background: `${color}08`,
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Version */}
+      <span style={{ color: T.dim, fontSize: 8, fontFamily: 'JetBrains Mono, monospace', flexShrink: 0 }}>
+        v{system.version}
+      </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Panel wrapper (border + bg)
+// ─────────────────────────────────────────────────────────────────────
+
+function Panel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="overflow-hidden"
+      style={{
+        background: T.panel,
+        border: `1px solid ${T.dim}`,
+        borderRadius: 8,
+        minHeight: 0,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Main
 // ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [data,         setData]         = useState<DashboardData | null>(null);
-  const [error,        setError]        = useState<string | null>(null);
-  const [loading,      setLoading]      = useState(true);
-  const [activeTab,    setActiveTab]    = useState<TabKey>('decisions');
-  const [healthData,   setHealthData]   = useState<Record<string, unknown> | null>(null);
-  const [buildInfo,    setBuildInfo]    = useState<Record<string, unknown> | null>(null);
-  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
+  const [data,        setData]        = useState<DashboardData | null>(null);
+  const [error,       setError]       = useState<string | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [healthData,  setHealthData]  = useState<Record<string, unknown> | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [subTab,      setSubTab]      = useState<TradingSubTab>('lifecycle');
 
-  // ── Data fetching ──────────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
       const result = await api.dashboard();
@@ -110,7 +240,7 @@ export default function DashboardPage() {
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to connect to API');
+      setError(e instanceof Error ? e.message : 'Failed to connect');
     } finally {
       setLoading(false);
     }
@@ -118,26 +248,21 @@ export default function DashboardPage() {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const [health, bi] = await Promise.all([api.health(), api.buildInfo()]);
+      const health = await api.health();
       setHealthData(health);
-      setBuildInfo(bi);
     } catch {
-      // non-critical — health tab will show stale data
+      // non-critical
     }
   }, []);
 
   useEffect(() => {
     fetchData();
     fetchHealth();
-    const dataInterval   = setInterval(fetchData,   5_000);
-    const healthInterval = setInterval(fetchHealth, 15_000);
-    return () => {
-      clearInterval(dataInterval);
-      clearInterval(healthInterval);
-    };
+    const d = setInterval(fetchData,   5_000);
+    const h = setInterval(fetchHealth, 15_000);
+    return () => { clearInterval(d); clearInterval(h); };
   }, [fetchData, fetchHealth]);
 
-  // ── Action handler ─────────────────────────────────────
   const handleAction = async (action: string) => {
     const reason = prompt(`Reason for ${action}:`);
     if (!reason) return;
@@ -145,7 +270,7 @@ export default function DashboardPage() {
       if (action === 'pause')  await api.pause(reason);
       if (action === 'resume') await api.resume(reason);
       if (action === 'kill') {
-        if (!confirm('⚠️ KILL SWITCH — Stops ALL trading and requires restart. Continue?')) return;
+        if (!confirm('⚠ KILL SWITCH — Stops ALL trading. Continue?')) return;
         await api.kill(reason);
       }
       await fetchData();
@@ -154,148 +279,94 @@ export default function DashboardPage() {
     }
   };
 
-  // ── Early returns ──────────────────────────────────────
-  if (loading)         return <LoadingScreen />;
-  if (error || !data)  return <ErrorScreen error={error ?? 'No data'} onRetry={fetchData} />;
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorScreen error={error ?? 'No data'} onRetry={fetchData} />;
 
   const { system, portfolio, riskLimits, recentDecisions, recentOrders, recentIncidents, recentLifecycles } = data;
-  const activeIncidents = recentIncidents.filter((i) => i.isActive).length;
-  const latestDecision  = recentDecisions[0] ?? null;
-
-  // Synthetic equity sparkline from session start to current
-  const equitySparkData = (() => {
-    const daily = portfolio.dailyPnl;
-    const eq    = portfolio.totalEquity;
-    // Approximate intraday curve as 5 points leading to current equity
-    return [
-      eq - daily * 1.0,
-      eq - daily * 0.75,
-      eq - daily * 0.5,
-      eq - daily * 0.25,
-      eq,
-    ];
-  })();
-
-  // ── Tabs config ────────────────────────────────────────
-  const tabs: { key: TabKey; label: string; icon: string; count?: number }[] = [
-    { key: 'decisions', label: 'AI Decisions', icon: '🤖', count: recentDecisions.length  },
-    { key: 'orders',    label: 'Orders',        icon: '📋', count: recentOrders.length     },
-    { key: 'lifecycle', label: 'Lifecycle',     icon: '🔗', count: recentLifecycles?.length ?? 0 },
-    { key: 'health',    label: 'Health',        icon: '🩺' },
-  ];
+  const latestDecision = recentDecisions[0] ?? null;
+  const symbol = latestDecision
+    ? String((latestDecision.inputSummary as Record<string, unknown> | null)?.symbol ?? 'BTCUSDT')
+    : 'BTCUSDT';
 
   return (
-    <div className="min-h-screen bg-[#0A0A0F]">
+    <div
+      className="flex flex-col"
+      style={{ width: '100vw', height: '100vh', background: T.bg, overflow: 'hidden' }}
+    >
+      {/* ── TOP BAR ── */}
+      <TerminalHeader system={system} lastUpdated={lastUpdated} onAction={handleAction} />
 
-      {/* ── FIXED HEADER ── */}
-      <Header
-        system={system}
-        activeIncidents={activeIncidents}
-        onAction={handleAction}
-        lastUpdated={lastUpdated}
-      />
-
-      {/* ── SCROLLABLE BODY ── */}
-      <main className="pt-14 pb-10 px-3 md:px-5 xl:px-6 max-w-[1600px] mx-auto space-y-4">
-
-        {/* Banners */}
-        <div className="pt-4">
-          <LiveBanner mode={system.mode} />
-          <HaltBanner state={system.state} reason={system.haltReason} />
+      {/* ── HALT BANNER ── */}
+      {system.state === 'HALTED' && (
+        <div
+          className="flex items-center gap-2 px-4 py-1.5 flex-shrink-0 border-b"
+          style={{ background: `${T.loss}12`, borderColor: `${T.loss}30` }}
+        >
+          <span
+            className="text-[8px] font-black tracking-widest"
+            style={{ color: T.loss, fontFamily: 'JetBrains Mono, monospace', textShadow: `0 0 6px ${T.loss}` }}
+          >
+            ● SYSTEM HALTED
+          </span>
+          {system.haltReason && (
+            <span style={{ color: T.neutral, fontSize: 9, fontFamily: 'JetBrains Mono, monospace' }}>
+              — {system.haltReason}
+            </span>
+          )}
         </div>
+      )}
 
-        {/* ╔══════════════════════════════════════════════╗
-            ║  SECTION 1 — PERFORMANCE KPI CARDS          ║
-            ╚══════════════════════════════════════════════╝ */}
-        <PerformancePanel portfolio={portfolio} equitySparkData={equitySparkData} />
+      {/* ── 2×3 PANEL GRID ── */}
+      <div
+        className="flex-1 grid min-h-0"
+        style={{
+          gridTemplateColumns: '1fr 1fr',
+          gridTemplateRows:    '1fr 1fr 1fr',
+          gap: 4,
+          padding: 4,
+        }}
+      >
+        {/* Row 1 */}
+        <Panel>
+          <PanelPerformance portfolio={portfolio} lifecycles={recentLifecycles} />
+        </Panel>
+        <Panel>
+          <PanelRisk
+            portfolio={{
+              consecutiveLosses: portfolio.consecutiveLosses,
+              dailyTradeCount:   portfolio.dailyTradeCount,
+              totalExposure:     portfolio.totalExposure,
+            }}
+            riskLimits={riskLimits}
+          />
+        </Panel>
 
-        {/* ╔══════════════════════════════════════════════╗
-            ║  SECTION 2 — RISK + MARKET + AI DECISION    ║
-            ╚══════════════════════════════════════════════╝ */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <RiskPanel portfolio={portfolio} riskLimits={riskLimits} />
-          <MarketRegimePanel decision={latestDecision} />
-          <LatestDecisionPanel decision={latestDecision} />
-        </div>
+        {/* Row 2 */}
+        <Panel>
+          <PanelMarket latestDecision={latestDecision} symbol={symbol} />
+        </Panel>
+        <Panel>
+          <PanelAI decisions={recentDecisions} />
+        </Panel>
 
-        {/* ╔══════════════════════════════════════════════╗
-            ║  SECTION 3 — POSITIONS + STATUS SIDEBAR     ║
-            ╚══════════════════════════════════════════════╝ */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <PositionsPanel positions={portfolio.openPositions} />
-          <div className="flex flex-col gap-4">
-            <IncidentsPanel incidents={recentIncidents} />
-            <SystemStatusPanel health={healthData} />
-          </div>
-        </div>
-
-        {/* ╔══════════════════════════════════════════════╗
-            ║  SECTION 4 — DETAIL TABLES (Tabbed)         ║
-            ╚══════════════════════════════════════════════╝ */}
-        <div>
-          {/* Tab navigation */}
-          <div className="flex items-center gap-1 bg-[#12121A] border border-[#1F1F2A] p-1 rounded-xl w-fit mb-4 flex-wrap">
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={cn(
-                  'flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
-                  activeTab === tab.key
-                    ? 'bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25'
-                    : 'text-[#64748B] hover:text-white hover:bg-[#1F1F2A]',
-                )}
-              >
-                <span>{tab.icon}</span>
-                <span>{tab.label}</span>
-                {tab.count !== undefined && tab.count > 0 && (
-                  <span
-                    className={cn(
-                      'text-[10px] px-1.5 py-0.5 rounded-full font-bold leading-none',
-                      activeTab === tab.key
-                        ? 'bg-[#3B82F6]/25 text-[#3B82F6]'
-                        : 'bg-[#1F1F2A] text-[#64748B]',
-                    )}
-                  >
-                    {tab.count}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab content */}
-          <Card className="p-4">
-            {activeTab === 'decisions' && (
-              <>
-                <SectionLabel>AI Decision History</SectionLabel>
-                <DecisionsTable decisions={recentDecisions} />
-              </>
-            )}
-            {activeTab === 'orders' && (
-              <>
-                <SectionLabel>Order Execution Log</SectionLabel>
-                <OrdersTable orders={recentOrders} />
-              </>
-            )}
-            {activeTab === 'lifecycle' && (
-              <>
-                <SectionLabel>Trade Lifecycle</SectionLabel>
-                <LifecycleTable lifecycles={recentLifecycles ?? []} />
-              </>
-            )}
-            {activeTab === 'health' && (
-              <HealthPanel health={healthData} buildInfo={buildInfo} />
-            )}
-          </Card>
-        </div>
-
-        {/* Footer */}
-        <p className="text-center text-[10px] text-[#1F1F2A] font-mono pb-2">
-          CryptoBot Platform v{system.version} · Automated Spot Trading ·
-          No financial guarantees · Priority: robustness &amp; risk control
-        </p>
-      </main>
+        {/* Row 3 */}
+        <Panel>
+          <PanelTrading
+            positions={portfolio.openPositions}
+            lifecycles={recentLifecycles}
+            orders={recentOrders}
+            activeSubTab={subTab}
+            setSubTab={setSubTab}
+          />
+        </Panel>
+        <Panel>
+          <PanelSystem
+            health={healthData}
+            system={system}
+            incidents={recentIncidents}
+          />
+        </Panel>
+      </div>
     </div>
   );
 }
