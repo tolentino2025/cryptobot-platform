@@ -1,65 +1,58 @@
 @import "tailwindcss";
 
-/* ═══════════════════════════════════════════════
-   QUANT TRADING TERMINAL — design tokens
-   ═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   CryptoBot Platform — Institutional Trading Desk Theme
+   ═══════════════════════════════════════════════════════ */
+
 :root {
-  --bg:            #0B0F14;
-  --panel:         #121820;
-  --panel-alt:     #0E1520;
-  --border:        #1E2A35;
-  --border-bright: #2A3A4A;
+  --bg:            #070D16;
+  --surface:       #0C1824;
+  --elevated:      #112030;
+  --border:        #1C2E40;
+  --border-active: #26405A;
 
-  --profit:   #00FF9C;
-  --loss:     #FF4D4D;
-  --warning:  #FFC857;
-  --info:     #4DA3FF;
-  --neutral:  #5A7A8A;
-  --purple:   #A78BFA;
+  --profit:  #22C55E;
+  --loss:    #EF4444;
+  --warning: #F59E0B;
+  --info:    #3B82F6;
+  --purple:  #8B5CF6;
+  --teal:    #14B8A6;
 
-  --text:     #C8D8E8;
-  --text-dim: #4A6070;
-  --text-muted:#2A3A4A;
+  --text:    #C4D6E8;
+  --text-sec:#5C7A90;
+  --text-dim:#283C50;
 
-  --glow-profit: 0 0 8px rgba(0,255,156,0.4);
-  --glow-loss:   0 0 8px rgba(255,77,77,0.4);
-  --glow-info:   0 0 8px rgba(77,163,255,0.4);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Terminal number style */
-.font-terminal {
-  font-family: 'JetBrains Mono', 'Courier New', monospace;
+/* Thin, clean scrollbars */
+::-webkit-scrollbar          { width: 4px; height: 4px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: var(--border-active); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3A5A70; }
+
+/* Pulse animation for live indicators */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1;   box-shadow: 0 0 4px currentColor; }
+  50%       { opacity: 0.6; box-shadow: 0 0 8px currentColor; }
 }
+.pulse { animation: pulse-glow 2s ease-in-out infinite; }
 
-/* Panel glow borders */
-.panel-profit { border-color: rgba(0,255,156,0.2); }
-.panel-loss   { border-color: rgba(255,77,77,0.2); }
-.panel-info   { border-color: rgba(77,163,255,0.15); }
-
-/* Glowing values */
-.glow-profit { text-shadow: var(--glow-profit); color: var(--profit); }
-.glow-loss   { text-shadow: var(--glow-loss);   color: var(--loss);   }
-.glow-info   { text-shadow: var(--glow-info);   color: var(--info);   }
-
-/* Scrollbars */
-::-webkit-scrollbar          { width: 3px; height: 3px; }
-::-webkit-scrollbar-track    { background: var(--bg); }
-::-webkit-scrollbar-thumb    { background: var(--border-bright); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #3A5060; }
-
-/* Scanline overlay (subtle) */
-@keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0.6 } }
-.blink { animation: blink 1s step-end infinite; }
-
-/* Pulse dot */
-@keyframes pulse-dot {
-  0%,100% { opacity:1; transform: scale(1); }
-  50%      { opacity:0.5; transform: scale(0.8); }
-}
-.pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+/* Mono font utility */
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
