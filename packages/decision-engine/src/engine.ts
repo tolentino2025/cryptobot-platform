@@ -37,7 +37,16 @@ export interface DecisionEngineConfig {
   allowedSymbols: string[];
 }
 
-export class ClaudeDecisionEngine {
+/**
+ * Strict interface for the decision engine.
+ * Intentionally does NOT include decide() — that method no longer exists.
+ * TypeScript build will fail if decide() is called anywhere.
+ */
+export interface IDecisionEngine {
+  assessMarket(context: DecisionContext): Promise<AIAssessmentRecord>;
+}
+
+export class ClaudeDecisionEngine implements IDecisionEngine {
   private config: DecisionEngineConfig;
   private circuitBreaker: CircuitBreaker;
 

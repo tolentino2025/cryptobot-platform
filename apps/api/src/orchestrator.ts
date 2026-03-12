@@ -79,6 +79,12 @@ export class MainOrchestrator {
    */
   private readonly firedKillSwitches = new Set<string>();
 
+  /**
+   * Tracks how many times each incident type has been raised this session.
+   * Used for automatic escalation: >3 occurrences → CRITICAL regardless of type.
+   */
+  private readonly incidentCounts = new Map<string, number>();
+
   // Clock drift monitoring
   private clockDriftInterval: ReturnType<typeof setInterval> | null = null;
   private lastClockDriftMs = 0;
@@ -206,6 +212,8 @@ export class MainOrchestrator {
       if (!expected || confirmationCode !== expected) {
         throw new Error('Invalid confirmation code for LIVE mode');
       }
+      // Run preflight checks — throws if any condition fails
+      await this.goLivePreflightCheck();
     }
     this.tradingMode = mode;
     await this.db.botConfig.update({
@@ -234,7 +242,12 @@ export class MainOrchestrator {
 
       // Start market data
       const simMode = this.tradingMode === TradingMode.SIM;
-      await this.marketData.start(this.riskLimits.allowedSymbols, simMode);
+      const restBaseUrl = this.tradingMode === TradingMode.LIVE
+        ? 'https://api.binance.com'
+        : this.tradingMode === TradingMode.DEMO
+          ? 'https://testnet.binance.vision'
+          : undefined;
+      await this.marketData.start(this.riskLimits.allowedSymbols, simMode, restBaseUrl);
 
       // Seed Redis counters from DB (prevents reset on restart)
       await this.portfolio.initializeCountersFromDb();
@@ -801,7 +814,19 @@ export class MainOrchestrator {
     error: unknown,
   ): Promise<void> {
     const description = error instanceof Error ? error.message : String(error);
-    const isCritical = CRITICAL_INCIDENT_TYPES.has(type);
+
+    // ── Escalation: >3 occurrences of any incident type → CRITICAL ──
+    const count = (this.incidentCounts.get(type) ?? 0) + 1;
+    this.incidentCounts.set(type, count);
+
+    const isCritical = CRITICAL_INCIDENT_TYPES.has(type) || count > 3;
+    if (!CRITICAL_INCIDENT_TYPES.has(type) && count > 3) {
+      logger.error(
+        { type, count },
+        `Incident ${type} has occurred ${count} times — escalating to CRITICAL`,
+      );
+    }
+
     const severity = isCritical ? IncidentSeverity.CRITICAL : IncidentSeverity.WARNING;
 
     await this.db.incident.create({
@@ -1047,7 +1072,7 @@ export class MainOrchestrator {
    */
   private validateInterfaces(): void {
     const execAsMap = this.executionOrch as unknown as Record<string, unknown>;
-    for (const method of ['execute', 'trackOpenOrders', 'cancelOrder']) {
+    for (const method of ['execute', 'executeExit', 'trackOpenOrders', 'cancelOrder']) {
       if (typeof execAsMap[method] !== 'function') {
         throw new Error(
           `STARTUP ABORTED: ExecutionOrchestrator is missing required method: ${method}`,
@@ -1064,6 +1089,53 @@ export class MainOrchestrator {
       }
     }
 
+    const decisionAsMap = this.decisionEngine as unknown as Record<string, unknown>;
+    if (typeof decisionAsMap['assessMarket'] !== 'function') {
+      throw new Error('STARTUP ABORTED: ClaudeDecisionEngine.assessMarket is missing');
+    }
+    if (typeof decisionAsMap['decide'] === 'function') {
+      throw new Error('STARTUP ABORTED: ClaudeDecisionEngine has legacy decide() — remove it before starting');
+    }
+
+    const marketDataAsMap = this.marketData as unknown as Record<string, unknown>;
+    if (typeof marketDataAsMap['isHealthy'] !== 'function') {
+      throw new Error('STARTUP ABORTED: MarketDataService.isHealthy is missing');
+    }
+
     logger.info('Interface validation passed — all required methods present');
+  }
+
+  /**
+   * Pre-flight check before switching to LIVE mode.
+   * Blocks the switch if any critical condition is unmet.
+   */
+  private async goLivePreflightCheck(): Promise<void> {
+    const errors: string[] = [];
+
+    // 1. System must be RUNNING (not PAUSED, DEGRADED, etc.)
+    if (this.systemState !== SystemState.RUNNING) {
+      errors.push(`System state is ${this.systemState} — must be RUNNING before going LIVE`);
+    }
+
+    // 2. No active incidents
+    const activeIncidents = await this.db.incident.count({ where: { isActive: true } });
+    if (activeIncidents > 0) {
+      errors.push(`${activeIncidents} active incident(s) must be resolved before going LIVE`);
+    }
+
+    // 3. Market data must be healthy for all allowed symbols
+    const symbols = this.riskLimits?.allowedSymbols ?? [];
+    for (const sym of symbols) {
+      const snapshot = this.marketData.getSnapshot(sym);
+      if (!snapshot || snapshot.dataAgeMs > MARKET_DATA_GAP_DEGRADED_MS) {
+        errors.push(`Market data for ${sym} is stale or unavailable`);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`LIVE preflight FAILED:\n${errors.map((e) => `  • ${e}`).join('\n')}`);
+    }
+
+    logger.info('LIVE preflight check passed — all conditions met');
   }
 }

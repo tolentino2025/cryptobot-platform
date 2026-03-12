@@ -33,6 +33,9 @@ interface SimState {
   volumeBase: number;           // baseline volume level
 }
 
+/** Threshold (ms) after which the watchdog restarts a stale data stream */
+const WATCHDOG_RESTART_MS = 5_000;
+
 export class MarketDataService {
   private snapshots: Map<string, MarketSnapshot> = new Map();
   private health: Map<string, MarketDataHealth> = new Map();
@@ -40,11 +43,23 @@ export class MarketDataService {
   private stalenessTimers: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   private simState: SimState | null = null;
-  private simInterval: ReturnType<typeof setInterval> | null = null;
+  // Per-symbol interval refs (fixes multi-symbol stop bug)
+  private simIntervals:      Map<string, ReturnType<typeof setInterval>> = new Map();
+  private restPollIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
+  private watchdogIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
 
-  /** Start consuming market data for configured symbols */
-  async start(symbols: string[], simMode = false): Promise<void> {
+  /** Base URL for REST price polling in DEMO/LIVE mode */
+  private restBaseUrl = '';
+
+  /**
+   * Start consuming market data for configured symbols.
+   * @param restBaseUrl  When provided, polls the exchange REST API every 2 s for real prices
+   *                     (DEMO = testnet URL, LIVE = production URL).
+   *                     When omitted the service runs in fully-simulated mode.
+   */
+  async start(symbols: string[], simMode = false, restBaseUrl?: string): Promise<void> {
     this.running = true;
+    this.restBaseUrl = restBaseUrl ?? '';
 
     for (const symbol of symbols) {
       this.health.set(symbol, {
@@ -58,33 +73,38 @@ export class MarketDataService {
         maxStalenessMs: 0,
       });
 
-      if (simMode) {
-        this.startSimulatedData(symbol);
+      // Always start simulated data for candles/book baseline
+      this.startSimulatedData(symbol);
+
+      if (!simMode && this.restBaseUrl) {
+        // DEMO/LIVE: overlay real prices from exchange REST every 2 s
+        this.startRestPriceFeed(symbol);
+        logger.info({ symbol, restBaseUrl: this.restBaseUrl }, 'REST price feed started (DEMO/LIVE mode)');
       } else {
-        // TODO: Real WebSocket connections to Binance
-        // For now, start simulated data as fallback
-        this.startSimulatedData(symbol);
-        logger.info({ symbol }, 'Started simulated market data (no real WS yet)');
+        logger.info({ symbol }, 'Simulated market data started (SIM mode)');
       }
 
-      // Staleness monitor
+      // Watchdog: restart data stream if no update for 5 s
+      this.startWatchdog(symbol, simMode);
+
+      // Staleness monitor (every 2 s)
       const timer = setInterval(() => this.checkStaleness(symbol), 2000);
       this.stalenessTimers.set(symbol, timer);
     }
 
-    logger.info({ symbols, simMode }, 'Market Data Service started');
+    logger.info({ symbols, simMode, hasRealFeed: !!this.restBaseUrl }, 'Market Data Service started');
   }
 
   /** Stop all data streams */
   async stop(): Promise<void> {
     this.running = false;
-    if (this.simInterval) {
-      clearInterval(this.simInterval);
-      this.simInterval = null;
-    }
-    for (const [, timer] of this.stalenessTimers) {
-      clearInterval(timer);
-    }
+    for (const [, t] of this.simIntervals)      clearInterval(t);
+    for (const [, t] of this.restPollIntervals)  clearInterval(t);
+    for (const [, t] of this.watchdogIntervals)  clearInterval(t);
+    for (const [, t] of this.stalenessTimers)    clearInterval(t);
+    this.simIntervals.clear();
+    this.restPollIntervals.clear();
+    this.watchdogIntervals.clear();
     this.stalenessTimers.clear();
     logger.info('Market Data Service stopped');
   }
@@ -111,6 +131,108 @@ export class MarketDataService {
     const snapshot = this.snapshots.get(symbol);
     if (!snapshot) return Infinity;
     return Date.now() - snapshot.timestamp;
+  }
+
+  /**
+   * Returns true if all tracked symbols (or a specific one) have fresh data.
+   * "Fresh" means last update was within 5 s.
+   * Required by startup interface validation (Problem 4).
+   */
+  isHealthy(symbol?: string): boolean {
+    if (symbol) {
+      return this.isDataFresh(symbol, WATCHDOG_RESTART_MS);
+    }
+    if (this.health.size === 0) return false;
+    for (const [sym] of this.health) {
+      if (!this.isDataFresh(sym, WATCHDOG_RESTART_MS)) return false;
+    }
+    return true;
+  }
+
+  // ── REST price feed (DEMO / LIVE mode) ───────────────────────
+
+  /**
+   * Poll the exchange REST API every 2 s for the current ticker price.
+   * Updates the ticker in the existing snapshot (keeps simulated candles/book).
+   */
+  private startRestPriceFeed(symbol: string): void {
+    const existing = this.restPollIntervals.get(symbol);
+    if (existing) clearInterval(existing);
+
+    const poll = async () => {
+      if (!this.running) return;
+      try {
+        const res = await fetch(
+          `${this.restBaseUrl}/api/v3/ticker/price?symbol=${symbol}`,
+        );
+        if (!res.ok) return;
+        const data = await res.json() as { price: string };
+        const price = parseFloat(data.price);
+        if (isNaN(price) || price <= 0) return;
+
+        // Patch the ticker price in the existing snapshot
+        const snapshot = this.snapshots.get(symbol);
+        if (snapshot) {
+          const halfSpread = price * 0.0001; // 1 bps spread approx
+          snapshot.ticker = {
+            ...snapshot.ticker,
+            bid:   price - halfSpread,
+            ask:   price + halfSpread,
+            last:  price,
+            timestamp: Date.now(),
+          };
+          snapshot.timestamp = Date.now();
+          snapshot.dataAgeMs  = 0;
+          snapshot.isFresh    = true;
+          const h = this.health.get(symbol);
+          if (h) { h.wsConnected = true; h.lastTickerUpdate = Date.now(); }
+        }
+      } catch (err) {
+        logger.warn({ symbol, error: err }, 'REST price feed poll failed');
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    this.restPollIntervals.set(symbol, interval);
+  }
+
+  // ── Watchdog ─────────────────────────────────────────────────
+
+  /**
+   * Restart the data stream for a symbol if no update has arrived within
+   * WATCHDOG_RESTART_MS (5 s).  Fires an incident event on first trigger.
+   */
+  private startWatchdog(symbol: string, simMode: boolean): void {
+    const existing = this.watchdogIntervals.get(symbol);
+    if (existing) clearInterval(existing);
+
+    const check = () => {
+      if (!this.running) return;
+      const snapshot = this.snapshots.get(symbol);
+      if (!snapshot) return;
+
+      const age = Date.now() - snapshot.timestamp;
+      if (age > WATCHDOG_RESTART_MS) {
+        logger.warn({ symbol, ageMs: age }, 'Market data watchdog: stale — restarting stream');
+        eventBus.emit('market:gap', { symbol, gapMs: age });
+
+        // Restart sim data
+        const si = this.simIntervals.get(symbol);
+        if (si) { clearInterval(si); this.simIntervals.delete(symbol); }
+        this.startSimulatedData(symbol);
+
+        // Restart REST feed if applicable
+        if (!simMode && this.restBaseUrl) {
+          const ri = this.restPollIntervals.get(symbol);
+          if (ri) { clearInterval(ri); this.restPollIntervals.delete(symbol); }
+          this.startRestPriceFeed(symbol);
+        }
+      }
+    };
+
+    const interval = setInterval(check, WATCHDOG_RESTART_MS);
+    this.watchdogIntervals.set(symbol, interval);
   }
 
   // ── Simulated data with realistic market regimes ─────────────
@@ -182,6 +304,10 @@ export class MarketDataService {
 
   /** Start simulated data generation with realistic regime behavior */
   private startSimulatedData(symbol: string): void {
+    // Clear any existing interval for this symbol before creating a new one
+    const existing = this.simIntervals.get(symbol);
+    if (existing) clearInterval(existing);
+
     this.simState = this.initSimState(50000);
 
     const update = () => {
@@ -327,9 +453,10 @@ export class MarketDataService {
       eventBus.emit('market:snapshot', { symbol, timestamp: now });
     };
 
-    // Update every second
+    // Update every second — store per-symbol so stop() can clear each one
     update();
-    this.simInterval = setInterval(update, 1000);
+    const interval = setInterval(update, 1000);
+    this.simIntervals.set(symbol, interval);
   }
 
   /** Aggregate 1m candles into 5m candles */
