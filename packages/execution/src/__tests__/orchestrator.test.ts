@@ -86,6 +86,7 @@ function makeMockDb() {
   return {
     position: {
       findFirst: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null),
       update: vi.fn(),
     },
     orderRequest: {
@@ -135,6 +136,8 @@ function makeMockPortfolio() {
     incrementTradesHour: vi.fn().mockResolvedValue(undefined),
     setExitPending: vi.fn().mockResolvedValue(undefined),
     setExitFailed: vi.fn().mockResolvedValue(undefined),
+    updateLifecycleOnExit: vi.fn().mockResolvedValue(undefined),
+    createTradeLifecycle: vi.fn().mockResolvedValue('lc_001'),
     getSummary: vi.fn(),
     getRiskState: vi.fn(),
   };

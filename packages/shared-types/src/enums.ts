@@ -12,23 +12,40 @@ export enum TradingMode {
 
 /** Global system state — drives all operational decisions */
 export enum SystemState {
-  INITIALIZING = 'INITIALIZING',
-  RUNNING = 'RUNNING',
-  DEGRADED = 'DEGRADED',
-  PAUSED = 'PAUSED',
-  KILLED = 'KILLED',
-  RECONCILING = 'RECONCILING',
-  SAFE_MODE = 'SAFE_MODE',
+  BOOTING = 'BOOTING',           // System is starting up (pre-init)
+  INITIALIZING = 'INITIALIZING', // Legacy alias for BOOTING — prefer BOOTING in new code
+  RUNNING = 'RUNNING',           // Normal operation — only state where trading is allowed
+  DEGRADED = 'DEGRADED',         // Market data stale (>2s) — trading suspended, auto-recoverable
+  PAUSED = 'PAUSED',             // Manual or automatic pause — requires explicit resume
+  RECONCILING = 'RECONCILING',   // Exchange reconciliation in progress
+  SAFE_MODE = 'SAFE_MODE',       // Critical discrepancies found — requires human intervention
+  KILLED = 'KILLED',             // Terminal state — no restart without process restart
 }
 
 /** States that BLOCK all trading activity */
 export const NON_TRADING_STATES: ReadonlySet<SystemState> = new Set([
+  SystemState.BOOTING,
   SystemState.INITIALIZING,
   SystemState.DEGRADED,
   SystemState.PAUSED,
   SystemState.KILLED,
   SystemState.RECONCILING,
   SystemState.SAFE_MODE,
+]);
+
+/**
+ * Explicit state transition map — defines legal transitions.
+ * KILLED and SAFE_MODE are terminal/restricted: no exit without human intervention.
+ */
+export const ALLOWED_STATE_TRANSITIONS: ReadonlyMap<SystemState, ReadonlySet<SystemState>> = new Map([
+  [SystemState.BOOTING,       new Set([SystemState.RUNNING, SystemState.RECONCILING, SystemState.KILLED, SystemState.SAFE_MODE])],
+  [SystemState.INITIALIZING,  new Set([SystemState.RUNNING, SystemState.RECONCILING, SystemState.KILLED, SystemState.SAFE_MODE, SystemState.BOOTING])],
+  [SystemState.RUNNING,       new Set([SystemState.DEGRADED, SystemState.PAUSED, SystemState.RECONCILING, SystemState.KILLED])],
+  [SystemState.DEGRADED,      new Set([SystemState.RUNNING, SystemState.PAUSED, SystemState.KILLED])],
+  [SystemState.PAUSED,        new Set([SystemState.RUNNING, SystemState.RECONCILING, SystemState.KILLED])],
+  [SystemState.RECONCILING,   new Set([SystemState.RUNNING, SystemState.PAUSED, SystemState.SAFE_MODE])],
+  [SystemState.SAFE_MODE,     new Set([SystemState.KILLED])], // Human must kill and restart
+  [SystemState.KILLED,        new Set()],                     // Terminal — no exit
 ]);
 
 /** AI model proposed action */
@@ -120,13 +137,28 @@ export enum PositionStatus {
 
 /** Position exit reason */
 export enum ExitReason {
-  TAKE_PROFIT = 'TAKE_PROFIT',
-  STOP_LOSS = 'STOP_LOSS',
-  TIMEOUT = 'TIMEOUT',
-  INVALIDATION = 'INVALIDATION',
-  MANUAL = 'MANUAL',
-  KILL_SWITCH = 'KILL_SWITCH',
-  AI_EXIT = 'AI_EXIT',
+  // ── Primary reasons ──────────────────────────────────────────────
+  TAKE_PROFIT      = 'TAKE_PROFIT',
+  STOP_LOSS        = 'STOP_LOSS',
+  TIME_EXIT        = 'TIME_EXIT',         // Position held too long
+  VOLATILITY_EXIT  = 'VOLATILITY_EXIT',   // Regime turned excessively volatile
+  REGIME_EXIT      = 'REGIME_EXIT',       // Trend reversed or regime changed
+  EMERGENCY_EXIT   = 'EMERGENCY_EXIT',    // Kill-switch triggered
+  // ── Legacy ───────────────────────────────────────────────────────
+  TIMEOUT          = 'TIMEOUT',           // Superseded by TIME_EXIT — kept for DB compatibility
+  INVALIDATION     = 'INVALIDATION',
+  MANUAL           = 'MANUAL',
+  KILL_SWITCH      = 'KILL_SWITCH',       // Superseded by EMERGENCY_EXIT
+  AI_EXIT          = 'AI_EXIT',           // Superseded by regime/volatility/time variants
+}
+
+/** Classified market regime — output of the AI assessment layer */
+export enum AIMarketRegime {
+  BULL_TREND    = 'BULL_TREND',
+  BEAR_TREND    = 'BEAR_TREND',
+  RANGE         = 'RANGE',
+  VOLATILE      = 'VOLATILE',
+  LOW_LIQUIDITY = 'LOW_LIQUIDITY',
 }
 
 /** Incident severity */
@@ -150,6 +182,9 @@ export enum IncidentType {
   DAILY_LOSS_LIMIT = 'DAILY_LOSS_LIMIT',
   WEEKLY_LOSS_LIMIT = 'WEEKLY_LOSS_LIMIT',
   CONSECUTIVE_LOSSES = 'CONSECUTIVE_LOSSES',
+  EXECUTION_FAILED = 'EXECUTION_FAILED',    // critical execution failure — triggers pause + reconcile
+  SPREAD_TOO_WIDE = 'SPREAD_TOO_WIDE',      // repeated spread violations
+  CLOCK_DRIFT = 'CLOCK_DRIFT',              // local clock diverged from exchange clock
   CLAUDE_API_ERROR = 'CLAUDE_API_ERROR',
   CLAUDE_INVALID_RESPONSE = 'CLAUDE_INVALID_RESPONSE',
   KILL_SWITCH_ACTIVATED = 'KILL_SWITCH_ACTIVATED',
@@ -197,6 +232,17 @@ export enum Exchange {
   COINBASE = 'COINBASE',  // Future
   KRAKEN = 'KRAKEN',      // Future
   SIMULATED = 'SIMULATED',
+}
+
+/**
+ * Trade lifecycle reconciliation status.
+ * Tracks whether the lifecycle record has been verified against the exchange.
+ */
+export enum ReconciliationStatus {
+  PENDING       = 'PENDING',        // Entry filled; not yet reconciled
+  RECONCILED    = 'RECONCILED',     // Exit confirmed; fully consistent
+  DIVERGENT     = 'DIVERGENT',      // Mismatch detected — incident raised
+  MANUAL_REVIEW = 'MANUAL_REVIEW',  // Requires human review (cannot auto-resolve)
 }
 
 /** Admin action types */

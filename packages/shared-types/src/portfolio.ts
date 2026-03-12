@@ -3,7 +3,7 @@
 // Position, balance, PnL types
 // ═══════════════════════════════════════════════════════════════
 
-import { PositionStatus, ExitReason } from './enums.js';
+import { PositionStatus, ExitReason, ReconciliationStatus } from './enums.js';
 
 /** Active or closed position */
 export interface Position {
@@ -95,6 +95,60 @@ export interface PortfolioSummary {
   dailyTradeCount: number;
   /** Consecutive losses counter */
   consecutiveLosses: number;
+  updatedAt: Date;
+}
+
+/**
+ * Complete end-to-end trade audit trail.
+ * One record per entry execution — updated as the trade progresses through fill → position → exit.
+ *
+ * Event flow:
+ *   decision → risk approval → order sent → ack → entry fill → position → exit fill → PnL → RECONCILED
+ */
+export interface TradeLifecycle {
+  id: string;
+  /** Unique trade reference — matches the tradeId field in fills/audit log */
+  tradeId: string;
+  decisionId: string;
+  symbol: string;
+
+  // ── Order audit ──
+  entryOrderIds: string[];
+  exitOrderIds: string[];
+
+  // ── Quantity audit ──
+  entryQtyRequested: number;
+  entryQtyFilled: number;
+  exitQtyRequested: number;
+  exitQtyFilled: number;
+
+  // ── Price audit ──
+  avgEntryPrice: number;
+  avgExitPrice: number | null;
+
+  // ── Cost audit ──
+  feesTotal: number;
+  /** Slippage vs requested price in basis points (positive = worse than expected) */
+  slippageBps: number;
+
+  // ── PnL ──
+  realizedPnl: number | null;
+  unrealizedPnl: number | null;
+
+  // ── Position reference ──
+  positionId: string | null;
+  /** Snapshot of the closed position state — preserved for audit after position cleanup */
+  positionAfterTrade: Record<string, unknown> | null;
+
+  // ── Exit ──
+  closedReason: ExitReason | string | null;
+
+  // ── Reconciliation ──
+  reconciliationStatus: ReconciliationStatus;
+  lastReconciledAt: Date | null;
+  reconciliationNotes: string | null;
+
+  createdAt: Date;
   updatedAt: Date;
 }
 

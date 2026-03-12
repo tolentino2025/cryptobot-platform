@@ -33,6 +33,36 @@ export interface SystemEvents {
   'system:pause': { reason: string };
   'system:resume': { reason: string };
   'system:kill': { reason: string };
+  /** Fired by ExecutionOrchestrator when a critical execution failure occurs */
+  'execution:critical-error': { symbol: string; error: string; action: string };
+  /**
+   * Fired by BinanceAdapter (WebSocket) when a fill is received.
+   * Allows ExecutionOrchestrator to react immediately instead of waiting for next poll.
+   */
+  'exchange:fill': {
+    clientOrderId: string;
+    exchangeOrderId: string;
+    symbol: string;
+    side: string;
+    filledQty: number;
+    price: number;
+    commission: number;
+    commissionAsset: string;
+    cumFilledQty: number;
+    cumQuoteQty: number;
+    isMaker: boolean;
+    isFinalFill: boolean;
+    tradeId: number;
+    transactTime: number;
+  };
+  /** Fired when an order reaches a terminal non-fill state (cancel, reject, expire) */
+  'exchange:order-terminal': {
+    clientOrderId: string;
+    exchangeOrderId: string;
+    symbol: string;
+    status: string;
+    reason: string | null;
+  };
 }
 
 type EventName = keyof SystemEvents;

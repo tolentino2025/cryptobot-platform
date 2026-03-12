@@ -379,7 +379,65 @@ model AuditLog {
   @@map("audit_log")
 }
 
-// ── 17. System State ──────────────────────────────────────────
+// ── 17. Trade Lifecycle ───────────────────────────────────────
+//
+// Complete end-to-end audit trail from decision to position close.
+// One record per trade entry. Updated as the trade progresses.
+
+model TradeLifecycle {
+  id                   String    @id @default(cuid())
+  /// Unique trade reference ID (matches the tradeId in fills/audit)
+  tradeId              String    @unique
+  decisionId           String
+  symbol               String
+
+  // ── Order IDs ──
+  entryOrderIds        String[]  @default([])
+  exitOrderIds         String[]  @default([])
+
+  // ── Quantity audit ──
+  entryQtyRequested    Float
+  entryQtyFilled       Float     @default(0)
+  exitQtyRequested     Float     @default(0)
+  exitQtyFilled        Float     @default(0)
+
+  // ── Price audit ──
+  avgEntryPrice        Float     @default(0)
+  avgExitPrice         Float?
+
+  // ── Cost audit ──
+  feesTotal            Float     @default(0)
+  /// Slippage vs requested price in basis points
+  slippageBps          Float     @default(0)
+
+  // ── PnL ──
+  realizedPnl          Float?
+  unrealizedPnl        Float?
+
+  // ── Position reference ──
+  positionId           String?
+  /// JSON snapshot of the closed position (for audit trail after position deleted)
+  positionAfterTrade   Json?
+
+  // ── Exit details ──
+  closedReason         String?
+
+  // ── Reconciliation ──
+  reconciliationStatus String    @default("PENDING")
+  lastReconciledAt     DateTime?
+  reconciliationNotes  String?
+
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([symbol, createdAt])
+  @@index([positionId])
+  @@index([decisionId])
+  @@index([reconciliationStatus])
+  @@map("trade_lifecycle")
+}
+
+// ── 18. System State ──────────────────────────────────────────
 
 model SystemState {
   id            String   @id @default(cuid())

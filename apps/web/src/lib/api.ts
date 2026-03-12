@@ -25,6 +25,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   // System
   health: () => apiFetch<any>('/health'),
+  buildInfo: () => apiFetch<any>('/build-info'),
   systemState: () => apiFetch<any>('/system/state'),
   pause: (reason: string) => apiFetch<any>('/system/pause', { method: 'POST', body: JSON.stringify({ reason }) }),
   resume: (reason: string) => apiFetch<any>('/system/resume', { method: 'POST', body: JSON.stringify({ reason }) }),
@@ -48,6 +49,10 @@ export const api = {
     const params = new URLSearchParams({ page: String(page), ...filters });
     return apiFetch<any>(`/audit?${params}`);
   },
+
+  // Trade Lifecycle
+  lifecycles: (page = 1) => apiFetch<any>(`/lifecycle?page=${page}`),
+  lifecycleById: (id: string) => apiFetch<any>(`/lifecycle/${id}`),
 
   // Config
   config: () => apiFetch<any>('/config'),

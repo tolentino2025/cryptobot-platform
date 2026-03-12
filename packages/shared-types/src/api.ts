@@ -34,6 +34,35 @@ export interface HealthResponse {
   timestamp: Date;
 }
 
+export interface ComponentHealth {
+  healthy: boolean;
+  latencyMs?: number;
+  error?: string;
+  lastCheckedAt: string;
+}
+
+export interface SystemHealthReport {
+  status: 'ok' | 'degraded' | 'error';
+  systemState: SystemState;
+  tradingMode: TradingMode;
+  uptime: number;
+  version: string;
+  checks: {
+    database: ComponentHealth;
+    redis: ComponentHealth;
+    exchange: ComponentHealth;
+    marketData: ComponentHealth & { symbols?: Record<string, { fresh: boolean; ageMs: number }> };
+    clockDrift: ComponentHealth & { driftMs?: number };
+  };
+  buildInfo: {
+    gitCommit: string;
+    buildTimestamp: string;
+    environment: string;
+    nodeVersion: string;
+  };
+  timestamp: string;
+}
+
 // ── Mode change ──
 
 export const ModeChangeRequestSchema = z.object({

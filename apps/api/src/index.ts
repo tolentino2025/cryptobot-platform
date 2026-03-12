@@ -87,6 +87,7 @@ async function main() {
       setSystemState: (state, reason) => orchestrator.setSystemState(state, reason),
       getTradingMode: () => orchestrator.getTradingMode(),
       setTradingMode: (mode, code) => orchestrator.setTradingMode(mode, code),
+      getHealth: () => orchestrator.getHealth(),
     });
 
     // 6. Start HTTP server

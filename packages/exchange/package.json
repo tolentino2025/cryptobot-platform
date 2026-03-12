@@ -11,9 +11,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cryptobot/shared-types": "*",
     "@cryptobot/core": "*",
-    "@cryptobot/db": "*"
+    "@cryptobot/db": "*",
+    "@cryptobot/shared-types": "*",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

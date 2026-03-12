@@ -1,6 +1,14 @@
 // ═══════════════════════════════════════════════════════════════
-// ClaudeDecisionEngine — Consults Claude for trading decisions
-// NEVER executes orders. Only proposes structured decisions.
+// ClaudeDecisionEngine — Consults Claude for market assessment
+//
+// NEW ARCHITECTURE (v2):
+//   Claude NEVER opens trades. It produces an AIAssessment:
+//     - regime classification
+//     - optional entry veto
+//     - optional exit signal with specific reason
+//
+//   Entry decisions are made by DeterministicEntryEngine.
+//   This engine only calls Claude for analysis.
 // ═══════════════════════════════════════════════════════════════
 
 import {
@@ -11,13 +19,13 @@ import {
 } from '@cryptobot/core';
 import type { PrismaClient, Prisma } from '@prisma/client';
 import {
-  DEFAULT_HOLD_DECISION,
-  type ModelDecision,
-  type ModelDecisionRecord,
+  DEFAULT_HOLD_ASSESSMENT,
+  type AIAssessment,
+  type AIAssessmentRecord,
   type DecisionContext,
 } from '@cryptobot/shared-types';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
-import { validateModelResponse } from './schema.js';
+import { validateAIAssessment } from './schema.js';
 
 const logger = createLogger('decision-engine');
 
@@ -42,29 +50,39 @@ export class ClaudeDecisionEngine {
   }
 
   /**
-   * Consult Claude for a trading decision.
-   * Returns structured ModelDecision — NEVER executes anything.
+   * Assess current market conditions.
+   * Returns an AIAssessmentRecord containing regime classification,
+   * optional entry veto, and optional exit signal.
+   *
+   * NEVER executes orders. NEVER returns a BUY action.
    */
-  async decide(context: DecisionContext): Promise<ModelDecisionRecord> {
+  async assessMarket(context: DecisionContext): Promise<AIAssessmentRecord> {
     const requestId = generateRequestId();
     const startTime = Date.now();
 
     // Circuit breaker check
     if (this.circuitBreaker.isOpen) {
-      logger.warn({ requestId }, 'Circuit breaker OPEN — returning HOLD');
-      return this.persistAndReturn(requestId, context, DEFAULT_HOLD_DECISION, '', true, 'Circuit breaker open', 0, 0, 0);
+      logger.warn({ requestId }, 'Circuit breaker OPEN — returning hold assessment');
+      return this.persistAndReturn(
+        requestId, context,
+        { ...DEFAULT_HOLD_ASSESSMENT, thesis: 'Circuit breaker open — no assessment available' },
+        '', true, 'Circuit breaker open', 0, 0, 0,
+      );
     }
 
-    // Skip API call if no key (SIM mode without key)
+    // No API key — SIM mode stub
     if (!this.config.apiKey) {
-      logger.debug({ requestId }, 'No API key — returning HOLD (SIM stub)');
-      return this.persistAndReturn(requestId, context, DEFAULT_HOLD_DECISION, '', true, 'No API key configured', 0, 0, 0);
+      logger.debug({ requestId }, 'No API key — returning hold assessment (SIM stub)');
+      return this.persistAndReturn(
+        requestId, context,
+        { ...DEFAULT_HOLD_ASSESSMENT, thesis: 'No API key configured' },
+        '', true, 'No API key configured', 0, 0, 0,
+      );
     }
 
     try {
       const userMessage = buildUserMessage(context);
 
-      // Call Claude API with timeout
       const response = await retryWithBackoff(
         () => this.callClaude(userMessage),
         {
@@ -78,26 +96,26 @@ export class ClaudeDecisionEngine {
       );
 
       const latencyMs = Date.now() - startTime;
-
-      // Validate response
-      const validation = validateModelResponse(response.text, this.config.allowedSymbols);
+      const validation = validateAIAssessment(response.text);
 
       this.circuitBreaker.recordSuccess();
 
       logger.info(
         {
           requestId,
-          action: validation.decision.action,
-          symbol: validation.decision.symbol,
-          confidence: validation.decision.confidence,
+          regime: validation.assessment.regime,
+          entry_veto: validation.assessment.entry_veto,
+          should_exit: validation.assessment.should_exit,
+          exit_reason: validation.assessment.exit_reason,
+          confidence: validation.assessment.confidence,
           valid: validation.valid,
           latencyMs,
         },
-        `Decision: ${validation.decision.action} (confidence: ${validation.decision.confidence})`,
+        `Assessment: ${validation.assessment.regime}${validation.assessment.entry_veto ? ' [VETO]' : ''}${validation.assessment.should_exit ? ` [EXIT:${validation.assessment.exit_reason}]` : ''}`,
       );
 
       return this.persistAndReturn(
-        requestId, context, validation.decision, response.text,
+        requestId, context, validation.assessment, response.text,
         !validation.valid,
         validation.valid ? null : validation.errors.join('; '),
         latencyMs, response.inputTokens, response.outputTokens,
@@ -111,7 +129,7 @@ export class ClaudeDecisionEngine {
 
       return this.persistAndReturn(
         requestId, context,
-        { ...DEFAULT_HOLD_DECISION, thesis: `API error: ${errorMsg.slice(0, 200)}` },
+        { ...DEFAULT_HOLD_ASSESSMENT, thesis: `API error: ${errorMsg.slice(0, 200)}` },
         '', true, errorMsg, latencyMs, 0, 0,
       );
     }
@@ -136,7 +154,7 @@ export class ClaudeDecisionEngine {
         },
         body: JSON.stringify({
           model: this.config.model,
-          max_tokens: 1024,
+          max_tokens: 512,   // Assessment is compact — no need for 1024
           system: SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userMessage }],
         }),
@@ -168,18 +186,18 @@ export class ClaudeDecisionEngine {
     }
   }
 
-  /** Persist decision to DB and return record */
+  /** Persist assessment to DB and return record */
   private async persistAndReturn(
     requestId: string,
     context: DecisionContext,
-    decision: ModelDecision,
+    assessment: AIAssessment,
     rawResponse: string,
     isFallback: boolean,
     fallbackReason: string | null,
     latencyMs: number,
     inputTokens: number,
     outputTokens: number,
-  ): Promise<ModelDecisionRecord> {
+  ): Promise<AIAssessmentRecord> {
     const inputSummary = {
       symbol: context.symbol,
       mid: context.ticker.mid,
@@ -191,16 +209,16 @@ export class ClaudeDecisionEngine {
       dailyTrades: context.account.dailyTradeCount,
     };
 
-    // Persist to DB
     let dbId = requestId;
     try {
       const record = await this.db.modelDecision.create({
         data: {
           requestId,
-          symbol: decision.symbol || context.symbol,
-          decision: decision as unknown as Prisma.InputJsonValue,
+          symbol: context.symbol,
+          // Store AIAssessment JSON — compatible with the existing Json column
+          decision: assessment as unknown as Prisma.InputJsonValue,
           inputSummary: inputSummary as unknown as Prisma.InputJsonValue,
-          rawResponse: rawResponse.slice(0, 10000), // Limit size
+          rawResponse: rawResponse.slice(0, 10000),
           isValid: !isFallback,
           isFallback,
           fallbackReason,
@@ -212,14 +230,14 @@ export class ClaudeDecisionEngine {
       });
       dbId = record.id;
     } catch (error) {
-      logger.error({ error, requestId }, 'Failed to persist decision — continuing');
+      logger.error({ error, requestId }, 'Failed to persist assessment — continuing');
     }
 
     return {
       id: dbId,
       requestId,
-      symbol: decision.symbol || context.symbol,
-      decision,
+      symbol: context.symbol,
+      assessment,
       inputSummary,
       rawResponse,
       isValid: !isFallback,

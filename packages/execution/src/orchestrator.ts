@@ -55,6 +55,17 @@ export class ExecutionOrchestrator {
 
     // Route EXIT decisions to dedicated handler
     if (decision.action === TradeAction.EXIT) {
+      // Safety guard — executeExit must exist (catches context-loss bugs at runtime)
+      if (typeof this.executeExit !== 'function') {
+        const msg = 'CRITICAL: executeExit is not a function — possible prototype corruption';
+        logger.fatal({ msg }, msg);
+        eventBus.emit('execution:critical-error', {
+          symbol: decision.symbol,
+          error: msg,
+          action: 'EXIT',
+        });
+        return null;
+      }
       return this.executeExit(decision, review, requestId);
     }
 
@@ -225,11 +236,12 @@ export class ExecutionOrchestrator {
 
     // Open or close position based on order purpose
     if (order.purpose === 'ENTRY') {
+      const fillPrice = response.averagePrice ?? order.price ?? 0;
       const positionId = await this.portfolio.openPosition({
         symbol: order.symbol,
         side: order.side === 'BUY' ? 'LONG' : 'SHORT',
         entryOrderId: orderId,
-        entryPrice: response.averagePrice ?? order.price ?? 0,
+        entryPrice: fillPrice,
         quantity: response.filledQuantity,
         notional: response.filledQuoteAmount,
         decisionId: order.decisionId,
@@ -243,6 +255,26 @@ export class ExecutionOrchestrator {
       });
 
       await this.portfolio.incrementTradesHour();
+
+      // ── Create TradeLifecycle ──
+      // Compute slippage: for LIMIT orders compare fill vs requested price
+      const requestedPrice = order.price ?? fillPrice;
+      const slippageBps = requestedPrice > 0
+        ? ((fillPrice - requestedPrice) / requestedPrice) * 10_000 * (order.side === 'BUY' ? 1 : -1)
+        : 0;
+
+      await this.portfolio.createTradeLifecycle({
+        tradeId,
+        decisionId: order.decisionId,
+        symbol: order.symbol,
+        entryOrderId: orderId,
+        entryQtyRequested: order.quantity,
+        entryQtyFilled: response.filledQuantity,
+        avgEntryPrice: fillPrice,
+        feesTotal: 0, // TODO: extract from exchange response when available
+        slippageBps: Math.max(0, slippageBps), // only count adverse slippage
+        positionId,
+      });
     }
   }
 
@@ -381,19 +413,20 @@ export class ExecutionOrchestrator {
         takeProfitPrice: null,
         maxSlippageBps: decision.max_slippage_bps,
         timeoutSec: 30,
-        purpose: 'EXIT_AI',
+        purpose: decision.exit_reason ?? 'EXIT_AI',
         status: OrderStatus.PENDING,
       },
     });
 
+    const exitPurpose = decision.exit_reason ?? 'EXIT_AI';
     await this.recordOrderEvent(order.id, requestId, null, OrderStatus.PENDING, null, null);
     await this.audit.recordOrder(requestId, tradeId, AuditEventType.ORDER_CREATED, {
       orderId: order.id,
       symbol: order.symbol,
       side,
       quantity: openPosition.quantity,
-      purpose: 'EXIT_AI',
-    }, `Exit order created: ${side} ${openPosition.quantity} ${order.symbol}`);
+      purpose: exitPurpose,
+    }, `Exit order created: ${side} ${openPosition.quantity} ${order.symbol} (${exitPurpose})`);
 
     // 7. Send to exchange
     let response: ExchangeOrderResponse;
@@ -409,7 +442,7 @@ export class ExecutionOrchestrator {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       logger.error({ err, positionId: openPosition.id }, 'Exit order failed — exchange error');
-      // Revert to OPEN
+      // Revert position to OPEN so risk engine can retry on next cycle
       await this.db.position.update({
         where: { id: openPosition.id },
         data: { status: 'OPEN', exitOrderSentAt: null },
@@ -419,6 +452,12 @@ export class ExecutionOrchestrator {
         data: { status: OrderStatus.FAILED },
       });
       await this.recordOrderEvent(order.id, requestId, OrderStatus.PENDING, OrderStatus.FAILED, null, errorMsg);
+      // Emit critical error so MainOrchestrator can pause + reconcile
+      eventBus.emit('execution:critical-error', {
+        symbol: decision.symbol,
+        error: `EXIT order failed: ${errorMsg}`,
+        action: 'EXIT',
+      });
       return null;
     }
 
@@ -495,10 +534,42 @@ export class ExecutionOrchestrator {
       quoteAmount: fillPrice * quantity,
     }, `Exit order filled: ${quantity} @ ${fillPrice}`);
 
-    // Close the position
-    const realizedPnl = await this.portfolio.closePosition(positionId, orderId, fillPrice, ExitReason.AI_EXIT, 0);
+    // Resolve exit reason from the order's purpose field (set by executeExit via decision.exit_reason)
+    const order = await this.db.orderRequest.findUnique({ where: { id: orderId }, select: { purpose: true } });
+    const exitReason = (order?.purpose ?? ExitReason.AI_EXIT) as ExitReason;
 
-    eventBus.emit('position:closed', { positionId, pnl: realizedPnl, reason: ExitReason.AI_EXIT });
+    // Close the position
+    const realizedPnl = await this.portfolio.closePosition(positionId, orderId, fillPrice, exitReason, 0);
+
+    eventBus.emit('position:closed', { positionId, pnl: realizedPnl, reason: exitReason });
+
+    // ── Finalize TradeLifecycle ──
+    // Build a snapshot of the closed position for audit trail
+    const closedPosition = await this.db.position.findUnique({ where: { id: positionId } });
+    if (closedPosition) {
+      await this.portfolio.updateLifecycleOnExit({
+        positionId,
+        exitOrderId: orderId,
+        exitQtyFilled: quantity,
+        avgExitPrice: fillPrice,
+        feesAdded: 0, // TODO: extract from exchange response
+        realizedPnl,
+        closedReason: exitReason,
+        positionSnapshot: {
+          symbol,
+          side: closedPosition.side,
+          entryPrice: closedPosition.entryPrice,
+          exitPrice: fillPrice,
+          quantity: closedPosition.quantity,
+          notional: closedPosition.notional,
+          realizedPnl,
+          realizedPnlPercent: closedPosition.realizedPnlPercent ?? 0,
+          holdingTimeSec: closedPosition.holdingTimeSec ?? 0,
+          totalCommission: closedPosition.totalCommission,
+          closedAt: new Date().toISOString(),
+        },
+      });
+    }
 
     logger.info({ positionId, orderId, fillPrice }, 'Position closed via EXIT signal');
   }

@@ -1,108 +1,94 @@
 // ═══════════════════════════════════════════════════════════════
-// Schema Validation — Validates Claude's response
-// Any invalid response becomes a HOLD fallback
+// Schema Validation — Validates Claude's assessment response
+// Any invalid response becomes a default no-action fallback
 // ═══════════════════════════════════════════════════════════════
 
 import {
-  ModelDecisionSchema,
-  DEFAULT_HOLD_DECISION,
-  type ModelDecision,
-  TradeAction,
+  AIAssessmentSchema,
+  DEFAULT_HOLD_ASSESSMENT,
+  type AIAssessment,
 } from '@cryptobot/shared-types';
 import { createLogger } from '@cryptobot/core';
 
 const logger = createLogger('decision-schema');
 
-export interface ValidationResult {
+export interface AssessmentValidationResult {
   valid: boolean;
-  decision: ModelDecision;
+  assessment: AIAssessment;
   errors: string[];
 }
 
 /**
- * Parse and validate Claude's raw response into a ModelDecision.
- * Returns DEFAULT_HOLD_DECISION if validation fails.
+ * Parse and validate Claude's raw response into an AIAssessment.
+ * Returns DEFAULT_HOLD_ASSESSMENT if validation fails.
  */
-export function validateModelResponse(
+export function validateAIAssessment(
   rawText: string,
-  allowedSymbols: string[],
-): ValidationResult {
-  const errors: string[] = [];
-
+): AssessmentValidationResult {
   // Step 1: Parse JSON
   let parsed: unknown;
   try {
-    // Strip potential markdown code fences
     const cleaned = rawText
       .replace(/```json\n?/g, '')
       .replace(/```\n?/g, '')
       .trim();
     parsed = JSON.parse(cleaned);
-  } catch (e) {
-    logger.warn({ rawText: rawText.slice(0, 200) }, 'Failed to parse model response as JSON');
+  } catch {
+    logger.warn({ rawText: rawText.slice(0, 200) }, 'Failed to parse AI assessment as JSON');
     return {
       valid: false,
-      decision: { ...DEFAULT_HOLD_DECISION, thesis: 'Invalid JSON response from model' },
+      assessment: { ...DEFAULT_HOLD_ASSESSMENT, thesis: 'Invalid JSON response from model' },
       errors: ['JSON parse error'],
     };
   }
 
   // Step 2: Validate against Zod schema
-  const result = ModelDecisionSchema.safeParse(parsed);
+  const result = AIAssessmentSchema.safeParse(parsed);
   if (!result.success) {
     const zodErrors = result.error.issues.map(
       (i) => `${i.path.join('.')}: ${i.message}`,
     );
-    logger.warn({ zodErrors }, 'Model response failed schema validation');
+    logger.warn({ zodErrors }, 'AI assessment failed schema validation');
     return {
       valid: false,
-      decision: { ...DEFAULT_HOLD_DECISION, thesis: 'Schema validation failed' },
+      assessment: { ...DEFAULT_HOLD_ASSESSMENT, thesis: 'Schema validation failed' },
       errors: zodErrors,
     };
   }
 
-  const decision = result.data;
+  const assessment = result.data;
 
-  // Step 3: Business logic validation
-  if (decision.action !== TradeAction.HOLD) {
-    // Symbol must be in whitelist
-    if (!allowedSymbols.includes(decision.symbol)) {
-      errors.push(`Symbol ${decision.symbol} not in allowed list`);
-    }
+  // Step 3: Business logic cross-checks
+  const errors: string[] = [];
 
-    // For BUY/SELL: prices must be logically consistent
-    if (decision.action === TradeAction.BUY) {
-      if (decision.stop_price > 0 && decision.stop_price >= decision.entry_price) {
-        errors.push('Stop price must be below entry price for BUY');
-      }
-      if (decision.take_profit_price > 0 && decision.take_profit_price <= decision.entry_price) {
-        errors.push('Take profit must be above entry price for BUY');
-      }
-    }
-
-    if (decision.action === TradeAction.SELL) {
-      if (decision.stop_price > 0 && decision.stop_price <= decision.entry_price) {
-        errors.push('Stop price must be above entry price for SELL');
-      }
-      if (decision.take_profit_price > 0 && decision.take_profit_price >= decision.entry_price) {
-        errors.push('Take profit must be below entry price for SELL');
-      }
-    }
-
-    // Confidence sanity check
-    if (decision.confidence < 0.1 && decision.action !== TradeAction.EXIT) {
-      errors.push('Very low confidence for non-EXIT action');
-    }
+  // exit_reason must be null when should_exit is false
+  if (!assessment.should_exit && assessment.exit_reason !== null) {
+    errors.push('exit_reason must be null when should_exit is false');
+  }
+  // exit_reason must be set when should_exit is true
+  if (assessment.should_exit && assessment.exit_reason === null) {
+    errors.push('exit_reason is required when should_exit is true');
+  }
+  // entry_veto_reason must be non-empty when entry_veto is true
+  if (assessment.entry_veto && !assessment.entry_veto_reason.trim()) {
+    errors.push('entry_veto_reason is required when entry_veto is true');
   }
 
   if (errors.length > 0) {
-    logger.warn({ errors, action: decision.action }, 'Business validation failed, falling back to HOLD');
+    logger.warn({ errors, assessment }, 'Business validation failed, using fallback assessment');
     return {
       valid: false,
-      decision: { ...DEFAULT_HOLD_DECISION, thesis: `Validation failed: ${errors.join('; ')}` },
+      assessment: { ...DEFAULT_HOLD_ASSESSMENT, thesis: `Validation failed: ${errors.join('; ')}` },
       errors,
     };
   }
 
-  return { valid: true, decision, errors: [] };
+  return { valid: true, assessment, errors: [] };
 }
+
+// ── Legacy export — kept for any callers that still import it ──
+export type ValidationResult = AssessmentValidationResult;
+export const validateModelResponse = validateAIAssessment as unknown as (
+  rawText: string,
+  _allowedSymbols: string[],
+) => AssessmentValidationResult;

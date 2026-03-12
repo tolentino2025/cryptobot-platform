@@ -13,7 +13,9 @@ import {
   ModeChangeRequestSchema,
   AdminActionRequestSchema,
   PaginationQuerySchema,
+  type SystemHealthReport,
 } from '@cryptobot/shared-types';
+import { getBuildInfo } from '@cryptobot/core';
 import type { AuditService } from '@cryptobot/audit';
 import type { PortfolioService } from '@cryptobot/portfolio';
 import type { NotificationService } from '@cryptobot/notifications';
@@ -27,6 +29,7 @@ export interface ServerDependencies {
   setSystemState: (state: SystemState, reason: string) => Promise<void>;
   getTradingMode: () => TradingMode;
   setTradingMode: (mode: TradingMode, confirmationCode?: string) => Promise<void>;
+  getHealth: () => Promise<SystemHealthReport>;
 }
 
 export async function createServer(deps: ServerDependencies) {
@@ -58,20 +61,9 @@ export async function createServer(deps: ServerDependencies) {
   // SYSTEM ENDPOINTS
   // ════════════════════════════════════════
 
-  app.get('/health', async () => {
-    const dbHealthy = await deps.db.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
-    return {
-      status: dbHealthy ? 'ok' : 'degraded',
-      checks: {
-        database: dbHealthy,
-        redis: true, // simplified
-        exchange: true,
-        marketData: true,
-        claudeApi: true,
-      },
-      timestamp: new Date().toISOString(),
-    };
-  });
+  app.get('/health', async () => deps.getHealth());
+
+  app.get('/build-info', async () => getBuildInfo());
 
   app.get('/system/state', async () => ({
     state: deps.getSystemState(),
@@ -260,6 +252,31 @@ export async function createServer(deps: ServerDependencies) {
     return { data, total, page, pageSize, hasMore: page * pageSize < total };
   });
 
+  // ════════════════════════════════════════
+  // TRADE LIFECYCLE ENDPOINTS
+  // ════════════════════════════════════════
+
+  app.get('/lifecycle', async (request) => {
+    const { page, pageSize } = PaginationQuerySchema.parse(request.query);
+    const [data, total, stats] = await Promise.all([
+      deps.db.tradeLifecycle.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: pageSize,
+        skip: (page - 1) * pageSize,
+      }),
+      deps.db.tradeLifecycle.count(),
+      deps.portfolio.getLifecycleStats(),
+    ]);
+    return { data, total, page, pageSize, hasMore: page * pageSize < total, stats };
+  });
+
+  app.get('/lifecycle/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    const lc = await deps.portfolio.getTradeLifecycleById(id);
+    if (!lc) return deps.db.$queryRaw`SELECT NULL`.then(() => { throw { statusCode: 404, message: 'Not found' }; });
+    return { data: lc };
+  });
+
   app.get('/audit', async (request) => {
     const { page, pageSize } = PaginationQuerySchema.parse(request.query);
     const q = request.query as Record<string, string>;
@@ -285,34 +302,67 @@ export async function createServer(deps: ServerDependencies) {
   // ════════════════════════════════════════
 
   app.get('/dashboard/overview', async () => {
-    const [portfolio, recentDecisions, recentOrders, recentIncidents, riskLimits] =
-      await Promise.all([
-        deps.portfolio.getSummary(),
-        deps.db.modelDecision.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 10,
-          include: { riskReview: true },
-        }),
-        deps.db.orderRequest.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 10,
-        }),
-        deps.db.incident.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 10,
-        }),
-        deps.db.riskLimits.findFirst({ where: { isActive: true } }),
-      ]);
+    const currentState = deps.getSystemState();
+
+    const [
+      portfolio,
+      recentDecisions,
+      recentOrders,
+      recentIncidents,
+      riskLimits,
+      recentLifecycles,
+      latestStateChange,
+    ] = await Promise.all([
+      deps.portfolio.getSummary(),
+      deps.db.modelDecision.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        include: { riskReview: true },
+      }),
+      deps.db.orderRequest.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      deps.db.incident.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      deps.db.riskLimits.findFirst({ where: { isActive: true } }),
+      deps.db.tradeLifecycle.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+      }),
+      // Trading halt reason — reason of latest non-RUNNING state change
+      deps.db.systemState.findFirst({
+        where: { state: { in: ['PAUSED', 'DEGRADED', 'KILLED', 'SAFE_MODE'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    // Computed fields
+    const unrealizedPnl = portfolio.openPositions.reduce(
+      (sum, p) => sum + (p.unrealizedPnl ?? 0), 0,
+    );
+    const dailyLossRemaining = riskLimits
+      ? riskLimits.maxDailyLoss + Math.min(0, portfolio.dailyPnl)
+      : null;
+    const tradingHaltReason = latestStateChange?.reason ?? null;
 
     return {
       system: {
-        state: deps.getSystemState(),
+        state: currentState,
         mode: deps.getTradingMode(),
         uptime: process.uptime(),
         version: '0.1.0',
+        haltReason: tradingHaltReason,
       },
-      portfolio,
-      riskLimits,
+      portfolio: {
+        ...portfolio,
+        unrealizedPnl,
+      },
+      riskLimits: riskLimits
+        ? { ...riskLimits, dailyLossRemaining }
+        : null,
       recentDecisions: recentDecisions.map((d) => ({
         id: d.id,
         action: (d.decision as any)?.action ?? 'HOLD',
@@ -326,6 +376,7 @@ export async function createServer(deps: ServerDependencies) {
       })),
       recentOrders,
       recentIncidents,
+      recentLifecycles,
     };
   });
 

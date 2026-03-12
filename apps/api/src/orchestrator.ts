@@ -8,50 +8,94 @@ import {
   generateRequestId,
   eventBus,
   sleep,
+  getRedis,
+  getBuildInfo,
 } from '@cryptobot/core';
+import type { SystemHealthReport } from '@cryptobot/shared-types';
 import type { PrismaClient, Prisma } from '@prisma/client';
 import {
   SystemState,
   TradingMode,
   TradeAction,
+  EntryType,
+  ExitReason,
   RiskVerdict,
   RiskDenialReason,
   AuditEventType,
   IncidentType,
   IncidentSeverity,
   NON_TRADING_STATES,
+  ALLOWED_STATE_TRANSITIONS,
+  type ModelDecision,
   type RiskLimits,
   type StrategyConfig,
 } from '@cryptobot/shared-types';
 import { MarketDataService } from '@cryptobot/market-data';
 import { FeatureEngine } from '@cryptobot/features';
-import { ClaudeDecisionEngine, type DecisionEngineConfig } from '@cryptobot/decision-engine';
+import {
+  ClaudeDecisionEngine,
+  DeterministicEntryEngine,
+  type DecisionEngineConfig,
+} from '@cryptobot/decision-engine';
 import { RiskEngine } from '@cryptobot/risk-engine';
 import { ExecutionOrchestrator } from '@cryptobot/execution';
 import type { IExchangeAdapter } from '@cryptobot/exchange';
-import { PortfolioService } from '@cryptobot/portfolio';
+import { PortfolioService, ReconciliationJob } from '@cryptobot/portfolio';
 import { AuditService } from '@cryptobot/audit';
 import { NotificationService } from '@cryptobot/notifications';
 
 const logger = createLogger('orchestrator');
 
+/** Clock drift thresholds */
+const CLOCK_DRIFT_WARNING_MS = 500;   // >500ms → WARNING incident
+const CLOCK_DRIFT_PAUSE_MS   = 1_000; // >1000ms → PAUSED
+
+/** Incident types that immediately pause the system (CRITICAL severity) */
+const CRITICAL_INCIDENT_TYPES = new Set<IncidentType>([
+  IncidentType.EXCHANGE_DESYNC,
+  IncidentType.UNEXPECTED_POSITION,
+  IncidentType.MARKET_DATA_GAP,
+  IncidentType.DAILY_LOSS_LIMIT,
+  IncidentType.WEEKLY_LOSS_LIMIT,
+  IncidentType.EXECUTION_FAILED,
+  IncidentType.BALANCE_INCONSISTENCY,
+  IncidentType.CLOCK_DRIFT,
+]);
+
+/** Market data gap thresholds */
+const MARKET_DATA_GAP_DEGRADED_MS = 2_000;  // >2s → DEGRADED
+const MARKET_DATA_GAP_PAUSED_MS   = 5_000;  // >5s → PAUSED
+
 export class MainOrchestrator {
-  private systemState: SystemState = SystemState.INITIALIZING;
+  private systemState: SystemState = SystemState.BOOTING;
   private tradingMode: TradingMode;
   private running = false;
   private loopInterval: ReturnType<typeof setInterval> | null = null;
   /** Symbols with an exit order in-flight — prevents duplicate EXIT cycles */
   private readonly exitingSymbols = new Set<string>();
+  /**
+   * Kill switches that have already fired this session — prevents repeated
+   * incident spam when a limit is continuously breached.
+   */
+  private readonly firedKillSwitches = new Set<string>();
+
+  // Clock drift monitoring
+  private clockDriftInterval: ReturnType<typeof setInterval> | null = null;
+  private lastClockDriftMs = 0;
+  private lastClockDriftCheckedAt: Date | null = null;
+  private clockDriftWarningFired = false;
 
   // Services
   private marketData: MarketDataService;
   private featureEngine: FeatureEngine;
   private decisionEngine: ClaudeDecisionEngine;
+  private deterministicEntry: DeterministicEntryEngine;
   private riskEngine: RiskEngine;
   private executionOrch: ExecutionOrchestrator;
   private portfolio: PortfolioService;
   private audit: AuditService;
   private notifications: NotificationService;
+  private reconciliationJob: ReconciliationJob;
 
   // Config
   private riskLimits!: RiskLimits;
@@ -73,11 +117,13 @@ export class MainOrchestrator {
     this.marketData = new MarketDataService();
     this.featureEngine = new FeatureEngine();
     this.decisionEngine = new ClaudeDecisionEngine(decisionEngineConfig, db);
+    this.deterministicEntry = new DeterministicEntryEngine();
     this.riskEngine = new RiskEngine();
     this.portfolio = new PortfolioService(db, adapter);
     this.audit = new AuditService(db);
     this.notifications = new NotificationService(webhookUrl);
     this.executionOrch = new ExecutionOrchestrator(adapter, db, this.audit, this.portfolio);
+    this.reconciliationJob = new ReconciliationJob(db, adapter, this.portfolio);
 
     this.setupEventHandlers();
   }
@@ -101,10 +147,35 @@ export class MainOrchestrator {
     };
   }
 
-  /** Set system state with audit trail */
+  /** Set system state with audit trail — enforces explicit transition rules */
   async setSystemState(newState: SystemState, reason: string): Promise<void> {
     const oldState = this.systemState;
     if (oldState === newState) return;
+
+    // ── Terminal state guards ──
+    if (oldState === SystemState.KILLED) {
+      logger.error(
+        { attempted: newState, reason },
+        'BLOCKED: Cannot transition out of KILLED — process restart required',
+      );
+      return;
+    }
+    if (oldState === SystemState.SAFE_MODE && newState !== SystemState.KILLED) {
+      logger.error(
+        { attempted: newState, reason },
+        'BLOCKED: SAFE_MODE can only transition to KILLED — human intervention required',
+      );
+      return;
+    }
+
+    // ── Transition validation (soft — logs warning, does not block) ──
+    const allowedNext = ALLOWED_STATE_TRANSITIONS.get(oldState);
+    if (allowedNext && !allowedNext.has(newState)) {
+      logger.warn(
+        { from: oldState, to: newState, reason },
+        `Non-standard state transition: ${oldState} → ${newState}`,
+      );
+    }
 
     this.systemState = newState;
     const requestId = generateRequestId();
@@ -151,6 +222,10 @@ export class MainOrchestrator {
     logger.info('╚══════════════════════════════════════════╝');
 
     try {
+      // ── Phase 0: Interface validation ──
+      // Abort startup if any critical service method is missing.
+      this.validateInterfaces();
+
       // Load config from DB
       await this.loadConfig();
 
@@ -181,6 +256,12 @@ export class MainOrchestrator {
 
       // Wait for initial data
       await sleep(2000);
+
+      // Start reconciliation job and clock drift monitor (skip in SIM mode — no real exchange)
+      if (this.tradingMode !== TradingMode.SIM) {
+        this.reconciliationJob.start(5 * 60 * 1000); // every 5 minutes
+        this.startClockDriftMonitor();
+      }
 
       // Start decision loop
       this.loopInterval = setInterval(
@@ -216,6 +297,8 @@ export class MainOrchestrator {
       clearInterval(this.loopInterval);
       this.loopInterval = null;
     }
+    this.reconciliationJob.stop();
+    this.stopClockDriftMonitor();
     await this.marketData.stop();
     await this.adapter.disconnect();
     logger.info('Orchestrator stopped');
@@ -223,7 +306,23 @@ export class MainOrchestrator {
 
   /** Main decision loop — runs on every tick */
   private async decisionLoop(): Promise<void> {
-    if (!this.running || NON_TRADING_STATES.has(this.systemState)) {
+    if (!this.running) return;
+
+    // ── Auto-recovery from DEGRADED ──
+    // If all allowed symbols have fresh data again, restore RUNNING automatically.
+    if (this.systemState === SystemState.DEGRADED) {
+      const allFresh = this.riskLimits?.allowedSymbols.every((s) =>
+        this.marketData.isDataFresh(s, MARKET_DATA_GAP_DEGRADED_MS),
+      ) ?? false;
+      if (allFresh) {
+        await this.setSystemState(SystemState.RUNNING, 'Market data recovered — auto-resuming from DEGRADED');
+        this.firedKillSwitches.delete('MARKET_DATA_GAP');
+      } else {
+        return; // Still degraded
+      }
+    }
+
+    if (NON_TRADING_STATES.has(this.systemState)) {
       return;
     }
 
@@ -260,11 +359,35 @@ export class MainOrchestrator {
       return;
     }
 
-    // Step 2: Check data freshness
-    if (!this.marketData.isDataFresh(symbol, this.riskLimits.dataFreshnessMaxMs)) {
-      logger.warn({ symbol, age: snapshot.dataAgeMs }, 'Stale market data — skipping');
+    // Step 2: Market data gap detection — classify by severity
+    const dataAge = snapshot.dataAgeMs;
+    if (dataAge > MARKET_DATA_GAP_PAUSED_MS) {
+      // Critical gap: data older than 5s → pause the entire system
+      if (!this.firedKillSwitches.has('MARKET_DATA_GAP')) {
+        this.firedKillSwitches.add('MARKET_DATA_GAP');
+        logger.error({ symbol, dataAge }, `Market data critical gap (${dataAge}ms > ${MARKET_DATA_GAP_PAUSED_MS}ms) — PAUSING system`);
+        await this.handleIncident(
+          requestId,
+          IncidentType.MARKET_DATA_GAP,
+          `Critical market data gap: ${symbol}`,
+          new Error(`Data age ${dataAge}ms exceeds ${MARKET_DATA_GAP_PAUSED_MS}ms critical threshold`),
+        );
+      }
       return;
     }
+    if (dataAge > MARKET_DATA_GAP_DEGRADED_MS) {
+      // Degraded gap: data older than 2s → degrade the system
+      if (this.systemState === SystemState.RUNNING) {
+        logger.warn({ symbol, dataAge }, `Market data stale (${dataAge}ms > ${MARKET_DATA_GAP_DEGRADED_MS}ms) — transitioning to DEGRADED`);
+        await this.setSystemState(
+          SystemState.DEGRADED,
+          `Market data stale: ${symbol} (${dataAge}ms > ${MARKET_DATA_GAP_DEGRADED_MS}ms)`,
+        );
+      }
+      return;
+    }
+    // Data is fresh — ensure kill switch clears on recovery
+    this.firedKillSwitches.delete('MARKET_DATA_GAP');
 
     // Step 3: Pre-flight risk check
     const t3 = Date.now();
@@ -315,33 +438,125 @@ export class MainOrchestrator {
       });
     }
 
-    // Step 6: Consult Claude
+    // Step 6: Consult Claude — regime classification + veto + exit signal only
+    // Claude DOES NOT open trades. DeterministicEntryEngine handles entries.
     const t6 = Date.now();
-    const decisionRecord = await this.decisionEngine.decide(context);
+    const assessmentRecord = await this.decisionEngine.assessMarket(context);
     const claudeMs = Date.now() - t6;
 
     await this.audit.recordDecision(
       requestId, null,
-      decisionRecord.isFallback ? AuditEventType.DECISION_FALLBACK : AuditEventType.DECISION_RECEIVED,
+      assessmentRecord.isFallback ? AuditEventType.DECISION_FALLBACK : AuditEventType.DECISION_RECEIVED,
       {
-        action: decisionRecord.decision.action,
-        confidence: decisionRecord.decision.confidence,
-        isFallback: decisionRecord.isFallback,
-        latencyMs: decisionRecord.latencyMs,
+        regime: assessmentRecord.assessment.regime,
+        entry_veto: assessmentRecord.assessment.entry_veto,
+        should_exit: assessmentRecord.assessment.should_exit,
+        exit_reason: assessmentRecord.assessment.exit_reason,
+        confidence: assessmentRecord.assessment.confidence,
+        isFallback: assessmentRecord.isFallback,
+        latencyMs: assessmentRecord.latencyMs,
       },
-      `Decision: ${decisionRecord.decision.action} (${decisionRecord.decision.confidence})`,
+      `Assessment: ${assessmentRecord.assessment.regime}` +
+      `${assessmentRecord.assessment.entry_veto ? ' [VETO]' : ''}` +
+      `${assessmentRecord.assessment.should_exit ? ` [EXIT:${assessmentRecord.assessment.exit_reason}]` : ''}`,
     );
 
-    // Step 7: If HOLD, log trace and return
-    if (decisionRecord.decision.action === TradeAction.HOLD) {
+    // Step 7: Determine final action
+    //   Priority: EXIT > BUY > HOLD
+    //   - EXIT: AI signals should_exit AND a position is open
+    //   - BUY:  DeterministicEntryEngine approves AND AI does not veto AND no open position
+    //   - HOLD: everything else
+
+    let finalDecision: ModelDecision | null = null;
+
+    if (assessmentRecord.assessment.should_exit && hasPosition) {
+      // AI signalled exit — build EXIT decision
+      finalDecision = {
+        action: TradeAction.EXIT,
+        symbol,
+        confidence: assessmentRecord.assessment.confidence,
+        entry_type: EntryType.MARKET,
+        entry_price: snapshot.ticker.bid,  // Use bid as proxy for exit price
+        size_quote: 0,
+        stop_price: 0,
+        take_profit_price: 0,
+        max_slippage_bps: 15,
+        time_horizon_sec: 30,
+        thesis: assessmentRecord.assessment.exit_thesis || assessmentRecord.assessment.thesis,
+        invalidate_if: [],
+        exit_reason: assessmentRecord.assessment.exit_reason ?? ExitReason.REGIME_EXIT,
+      };
+
+      logger.info(
+        {
+          symbol,
+          exit_reason: finalDecision.exit_reason,
+          regime: assessmentRecord.assessment.regime,
+          thesis: finalDecision.thesis,
+        },
+        `AI exit signal: ${finalDecision.exit_reason}`,
+      );
+    } else if (!hasPosition && !assessmentRecord.assessment.entry_veto) {
+      // No position — evaluate deterministic entry conditions
+      const entryCandidate = this.deterministicEntry.evaluate(
+        context.features,
+        snapshot.ticker,
+        {
+          takeProfitBps: this.strategyConfig.takeProfitBps,
+          stopLossBps: this.strategyConfig.stopLossBps,
+          timeoutSec: this.strategyConfig.timeoutSeconds,
+          // sizeQuote: not in StrategyConfig — DeterministicEntryEngine uses its own default (50 USDT)
+        },
+      );
+
+      if (entryCandidate.shouldEnter) {
+        finalDecision = {
+          action: TradeAction.BUY,
+          symbol,
+          confidence: assessmentRecord.assessment.confidence,
+          entry_type: entryCandidate.entryType,
+          entry_price: entryCandidate.entryPrice,
+          size_quote: entryCandidate.sizeQuote,
+          stop_price: entryCandidate.stopPrice,
+          take_profit_price: entryCandidate.takeProfitPrice,
+          max_slippage_bps: entryCandidate.maxSlippageBps,
+          time_horizon_sec: entryCandidate.timeHorizonSec,
+          thesis: `[DETERMINISTIC] ${entryCandidate.reason} | AI regime: ${assessmentRecord.assessment.regime}`,
+          invalidate_if: [],
+          exit_reason: null,
+        };
+
+        logger.info(
+          {
+            symbol,
+            entryPrice: entryCandidate.entryPrice,
+            stopPrice: entryCandidate.stopPrice,
+            takeProfitPrice: entryCandidate.takeProfitPrice,
+            sizeQuote: entryCandidate.sizeQuote,
+            regime: assessmentRecord.assessment.regime,
+          },
+          'Deterministic entry: BUY candidate approved by AI regime',
+        );
+      }
+    }
+
+    // Step 7b: If HOLD (no action), log trace and return
+    if (!finalDecision) {
+      const holdReason = assessmentRecord.assessment.entry_veto
+        ? `AI veto: ${assessmentRecord.assessment.entry_veto_reason}`
+        : 'No entry conditions met / no exit signal';
+
       logger.debug(
         {
           symbol,
+          regime: assessmentRecord.assessment.regime,
+          entry_veto: assessmentRecord.assessment.entry_veto,
           riskStateMs,
           featuresMs,
           claudeMs,
           totalMs: Date.now() - cycleStart,
-          thesis: decisionRecord.decision.thesis,
+          thesis: assessmentRecord.assessment.thesis,
+          holdReason,
         },
         'Cycle complete: HOLD',
       );
@@ -350,7 +565,7 @@ export class MainOrchestrator {
 
     // Step 8: Risk review
     const review = this.riskEngine.evaluate(
-      decisionRecord.decision,
+      finalDecision,
       this.riskLimits,
       riskState,
       portfolio,
@@ -358,14 +573,14 @@ export class MainOrchestrator {
       snapshot.dataAgeMs,
     );
 
-    // Link review to decision
-    review.decisionId = decisionRecord.id;
+    // Link review to the assessment record ID
+    review.decisionId = assessmentRecord.id;
     review.requestId = requestId;
 
     // Persist risk review
     await this.db.riskReview.create({
       data: {
-        decisionId: decisionRecord.id,
+        decisionId: assessmentRecord.id,
         requestId,
         verdict: review.verdict,
         denialReasons: review.denialReasons,
@@ -386,13 +601,13 @@ export class MainOrchestrator {
       denialReasons: review.denialReasons,
     }, `Risk: ${review.verdict} — ${review.explanation}`);
 
-    // Step 9: If denied, log structured trace and return
+    // Step 9: If denied, log structured trace and apply kill switches
     if (review.verdict === RiskVerdict.DENIED) {
       logger.info(
         {
           symbol,
-          action: decisionRecord.decision.action,
-          confidence: decisionRecord.decision.confidence,
+          action: finalDecision.action,
+          confidence: finalDecision.confidence,
           reasons: review.denialReasons,
           riskStateMs,
           featuresMs,
@@ -402,44 +617,82 @@ export class MainOrchestrator {
         `Decision DENIED [${review.denialReasons.join(', ')}]`,
       );
 
-      // Check if we need cooldown
+      // ── Kill switch triggers on specific denial reasons ──
       if (review.denialReasons.includes(RiskDenialReason.CONSECUTIVE_LOSSES)) {
         await this.portfolio.setCooldown(this.riskLimits.cooldownAfterLossMinutes);
+        if (!this.firedKillSwitches.has('CONSECUTIVE_LOSSES')) {
+          this.firedKillSwitches.add('CONSECUTIVE_LOSSES');
+          await this.handleIncident(
+            requestId,
+            IncidentType.CONSECUTIVE_LOSSES,
+            'Consecutive loss limit reached',
+            new Error(`${riskState.consecutiveLosses} consecutive losses — cooldown activated`),
+          );
+        }
       }
+
+      if (review.denialReasons.includes(RiskDenialReason.DAILY_LOSS_EXCEEDED)) {
+        if (!this.firedKillSwitches.has('DAILY_LOSS_LIMIT')) {
+          this.firedKillSwitches.add('DAILY_LOSS_LIMIT');
+          await this.handleIncident(
+            requestId,
+            IncidentType.DAILY_LOSS_LIMIT,
+            'Daily loss limit reached — trading suspended',
+            new Error(`Daily PnL: ${riskState.dailyPnl} (limit: ${this.riskLimits.maxDailyLoss})`),
+          );
+        }
+      }
+
+      if (review.denialReasons.includes(RiskDenialReason.WEEKLY_LOSS_EXCEEDED)) {
+        if (!this.firedKillSwitches.has('WEEKLY_LOSS_LIMIT')) {
+          this.firedKillSwitches.add('WEEKLY_LOSS_LIMIT');
+          await this.handleIncident(
+            requestId,
+            IncidentType.WEEKLY_LOSS_LIMIT,
+            'Weekly loss limit reached — trading suspended',
+            new Error(`Weekly PnL: ${riskState.weeklyPnl} (limit: ${this.riskLimits.maxWeeklyLoss})`),
+          );
+        }
+      }
+
+      if (review.denialReasons.includes(RiskDenialReason.SPREAD_TOO_WIDE)) {
+        if (!this.firedKillSwitches.has('SPREAD_TOO_WIDE')) {
+          this.firedKillSwitches.add('SPREAD_TOO_WIDE');
+          await this.handleIncident(
+            requestId,
+            IncidentType.SPREAD_TOO_WIDE,
+            'Excessive spread detected',
+            new Error(`Spread ${context.features.spreadBps}bps exceeds limit ${this.riskLimits.maxSpreadBps}bps`),
+          );
+        }
+      }
+
       return;
     }
 
     // Step 10: Execute
     const execStart = Date.now();
     const orderId = await this.executionOrch.execute(
-      decisionRecord.decision, review, requestId,
+      finalDecision, review, requestId,
     );
     const execLatencyMs = Date.now() - execStart;
 
     if (orderId) {
       logger.info(
-        { symbol, action: decisionRecord.decision.action, orderId, execLatencyMs },
+        { symbol, action: finalDecision.action, orderId, execLatencyMs },
         'Order executed',
       );
-      // Increment hourly trade counter for non-EXIT actions
-      if (decisionRecord.decision.action !== TradeAction.EXIT) {
-        await this.portfolio.incrementTradesHour();
-      }
+      // NOTE: incrementTradesHour() is called exclusively inside ExecutionOrchestrator.processFill()
     }
 
     // Step 11: Handle EXIT post-execution
-    if (decisionRecord.decision.action === TradeAction.EXIT) {
+    if (finalDecision.action === TradeAction.EXIT) {
       if (orderId) {
-        // Lock this symbol to prevent duplicate EXIT cycles
         this.exitingSymbols.add(symbol);
-        // Auto-clear lock after 60 seconds as failsafe
-        setTimeout(() => {
-          this.exitingSymbols.delete(symbol);
-        }, 60_000);
+        setTimeout(() => { this.exitingSymbols.delete(symbol); }, 60_000);
       } else if (review.verdict === RiskVerdict.APPROVED) {
-        // EXIT was approved but execution failed to create an order — raise incident
         logger.error(
-          { symbol, decisionId: decisionRecord.id },
+          { symbol, assessmentId: assessmentRecord.id },
           'EXIT approved but no exit order created — incident raised',
         );
         await this.createIncident(
@@ -451,7 +704,7 @@ export class MainOrchestrator {
       }
     }
 
-    // Check if position just closed (e.g. EXIT fill completed) — clear lock
+    // Check if position just closed — clear exit lock
     const latestPosition = await this.db.position.findFirst({
       where: { symbol, status: { in: ['OPEN', 'EXIT_PENDING'] } },
       orderBy: { openedAt: 'desc' },
@@ -463,14 +716,15 @@ export class MainOrchestrator {
     logger.info(
       {
         symbol,
-        action: decisionRecord.decision.action,
+        action: finalDecision.action,
         orderId,
+        regime: assessmentRecord.assessment.regime,
         riskStateMs,
         featuresMs,
         claudeMs,
         totalMs: Date.now() - cycleStart,
       },
-      `Cycle complete: ${decisionRecord.decision.action} → ${orderId ? 'executed' : 'skipped'}`,
+      `Cycle complete: ${finalDecision.action} → ${orderId ? 'executed' : 'skipped'}`,
     );
   }
 
@@ -539,7 +793,7 @@ export class MainOrchestrator {
     );
   }
 
-  /** Handle an incident */
+  /** Handle an incident — CRITICAL types pause the system, FATAL types kill it */
   private async handleIncident(
     requestId: string,
     type: IncidentType,
@@ -547,8 +801,8 @@ export class MainOrchestrator {
     error: unknown,
   ): Promise<void> {
     const description = error instanceof Error ? error.message : String(error);
-    const severity = type === IncidentType.EXCHANGE_DESYNC || type === IncidentType.UNEXPECTED_POSITION
-      ? IncidentSeverity.CRITICAL : IncidentSeverity.WARNING;
+    const isCritical = CRITICAL_INCIDENT_TYPES.has(type);
+    const severity = isCritical ? IncidentSeverity.CRITICAL : IncidentSeverity.WARNING;
 
     await this.db.incident.create({
       data: {
@@ -557,36 +811,259 @@ export class MainOrchestrator {
         severity,
         title,
         description,
-        actionTaken: severity === IncidentSeverity.CRITICAL ? 'PAUSED' : 'LOGGED',
+        actionTaken: isCritical ? 'PAUSED' : 'LOGGED',
         isActive: true,
       },
     });
 
     eventBus.emit('incident:created', { incidentId: requestId, type, severity });
 
-    if (severity === IncidentSeverity.CRITICAL) {
-      await this.setSystemState(SystemState.PAUSED, `Incident: ${title}`);
+    if (isCritical) {
+      logger.error({ type, title, description }, `CRITICAL incident — pausing system`);
+      await this.setSystemState(SystemState.PAUSED, `Critical incident: ${title}`);
       await this.notifications.critical(title, description);
     } else {
+      logger.warn({ type, title, description }, `Incident logged`);
       await this.notifications.warning(title, description);
+    }
+  }
+
+  /**
+   * Trigger a reconciliation cycle — used after execution errors to verify
+   * exchange state matches local state.
+   */
+  private async triggerReconciliation(reason: string): Promise<void> {
+    if (this.tradingMode === TradingMode.SIM) return;
+    if (this.systemState === SystemState.RECONCILING) return;
+    if (this.systemState === SystemState.KILLED) return;
+
+    logger.warn({ reason }, 'Triggering reconciliation');
+    await this.setSystemState(SystemState.RECONCILING, `Reconciliation triggered: ${reason}`);
+    const result = await this.portfolio.reconcile();
+
+    if (result.requiresSafeMode) {
+      await this.setSystemState(SystemState.SAFE_MODE, 'Reconciliation found critical discrepancies');
+      await this.notifications.critical('SAFE MODE', 'Reconciliation failed — manual intervention required');
+    } else {
+      await this.setSystemState(SystemState.PAUSED, 'Reconciliation complete — awaiting manual resume');
+      await this.notifications.warning('Reconciliation complete', `Triggered by: ${reason}. System is PAUSED.`);
     }
   }
 
   /** Setup event handlers for automatic reactions */
   private setupEventHandlers(): void {
-    eventBus.on('market:gap', async ({ symbol, gapMs }) => {
-      if (this.riskLimits?.killOnMarketDataGap) {
-        await this.handleIncident(
-          generateRequestId(),
-          IncidentType.MARKET_DATA_GAP,
-          `Market data gap: ${symbol}`,
-          new Error(`Data gap of ${gapMs}ms detected for ${symbol}`),
-        );
-      }
+    // Market data gap from the MarketDataService staleness checker
+    eventBus.on('market:gap', async ({ symbol, gapMs }: { symbol: string; gapMs: number }) => {
+      if (!this.riskLimits?.killOnMarketDataGap) return;
+      // Only fire once per gap episode (firedKillSwitches prevents repeated incidents)
+      if (this.firedKillSwitches.has('MARKET_DATA_GAP')) return;
+      this.firedKillSwitches.add('MARKET_DATA_GAP');
+      await this.handleIncident(
+        generateRequestId(),
+        IncidentType.MARKET_DATA_GAP,
+        `Market data gap: ${symbol}`,
+        new Error(`Data gap of ${gapMs}ms detected for ${symbol}`),
+      );
     });
 
-    eventBus.on('system:kill', async ({ reason }) => {
+    // Execution critical error — pause system and trigger reconciliation
+    eventBus.on('execution:critical-error', async ({ symbol, error, action }: { symbol: string; error: string; action: string }) => {
+      const reqId = generateRequestId();
+      await this.handleIncident(
+        reqId,
+        IncidentType.EXECUTION_FAILED,
+        `Execution critical failure: ${action} ${symbol}`,
+        new Error(error),
+      );
+      await this.triggerReconciliation(`execution_error:${action}:${symbol}`);
+    });
+
+    // Manual kill switch via event bus
+    eventBus.on('system:kill', async ({ reason }: { reason: string }) => {
       await this.setSystemState(SystemState.KILLED, reason);
     });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // CLOCK DRIFT MONITOR
+  // ─────────────────────────────────────────────────────────
+
+  /** Start comparing local clock with exchange time every 30 seconds. */
+  private startClockDriftMonitor(): void {
+    if (this.clockDriftInterval) return;
+    this.clockDriftInterval = setInterval(() => this.checkClockDrift(), 30_000);
+    logger.info('Clock drift monitor started');
+  }
+
+  private stopClockDriftMonitor(): void {
+    if (this.clockDriftInterval) {
+      clearInterval(this.clockDriftInterval);
+      this.clockDriftInterval = null;
+    }
+  }
+
+  private async checkClockDrift(): Promise<void> {
+    try {
+      const before = Date.now();
+      const exchangeTime = await this.adapter.getServerTime();
+      const after = Date.now();
+      // Use midpoint of the request to approximate local time at exchange measurement
+      const localTime = Math.round((before + after) / 2);
+      const driftMs = Math.abs(localTime - exchangeTime);
+
+      this.lastClockDriftMs = driftMs;
+      this.lastClockDriftCheckedAt = new Date();
+
+      if (driftMs > CLOCK_DRIFT_PAUSE_MS) {
+        if (!this.firedKillSwitches.has('CLOCK_DRIFT')) {
+          this.firedKillSwitches.add('CLOCK_DRIFT');
+          logger.error({ driftMs }, `Clock drift CRITICAL (${driftMs}ms > ${CLOCK_DRIFT_PAUSE_MS}ms) — PAUSING system`);
+          await this.handleIncident(
+            generateRequestId(),
+            IncidentType.CLOCK_DRIFT,
+            `Clock drift critical: ${driftMs}ms`,
+            new Error(`Local clock differs from exchange by ${driftMs}ms — exceeds ${CLOCK_DRIFT_PAUSE_MS}ms threshold`),
+          );
+        }
+      } else if (driftMs > CLOCK_DRIFT_WARNING_MS) {
+        if (!this.clockDriftWarningFired) {
+          this.clockDriftWarningFired = true;
+          logger.warn({ driftMs }, `Clock drift WARNING (${driftMs}ms > ${CLOCK_DRIFT_WARNING_MS}ms)`);
+          await this.handleIncident(
+            generateRequestId(),
+            IncidentType.CLOCK_DRIFT,
+            `Clock drift warning: ${driftMs}ms`,
+            new Error(`Local clock differs from exchange by ${driftMs}ms — exceeds ${CLOCK_DRIFT_WARNING_MS}ms threshold`),
+          );
+        }
+      } else {
+        // Drift recovered — clear flags
+        this.clockDriftWarningFired = false;
+        this.firedKillSwitches.delete('CLOCK_DRIFT');
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Clock drift check failed — could not reach exchange');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // SYSTEM HEALTH REPORT
+  // ─────────────────────────────────────────────────────────
+
+  /** Return a comprehensive health report for diagnostics. */
+  async getHealth(): Promise<SystemHealthReport> {
+    const now = new Date().toISOString();
+
+    // ── Database ──
+    const dbStart = Date.now();
+    const dbHealth = await this.db.$queryRaw`SELECT 1`
+      .then(() => ({ healthy: true, latencyMs: Date.now() - dbStart, lastCheckedAt: now }))
+      .catch((e: unknown) => ({
+        healthy: false,
+        latencyMs: Date.now() - dbStart,
+        error: e instanceof Error ? e.message : String(e),
+        lastCheckedAt: now,
+      }));
+
+    // ── Redis ──
+    const redisStart = Date.now();
+    const redisHealth = await getRedis().ping()
+      .then(() => ({ healthy: true, latencyMs: Date.now() - redisStart, lastCheckedAt: now }))
+      .catch((e: unknown) => ({
+        healthy: false,
+        latencyMs: Date.now() - redisStart,
+        error: e instanceof Error ? e.message : String(e),
+        lastCheckedAt: now,
+      }));
+
+    // ── Exchange ──
+    const exchStart = Date.now();
+    const exchHealth = await this.adapter.getServerTime()
+      .then(() => ({ healthy: true, latencyMs: Date.now() - exchStart, lastCheckedAt: now }))
+      .catch((e: unknown) => ({
+        healthy: false,
+        latencyMs: Date.now() - exchStart,
+        error: e instanceof Error ? e.message : String(e),
+        lastCheckedAt: now,
+      }));
+
+    // ── Market data ──
+    const symbols = this.riskLimits?.allowedSymbols ?? [];
+    const symbolHealth: Record<string, { fresh: boolean; ageMs: number }> = {};
+    let marketDataHealthy = true;
+    for (const sym of symbols) {
+      const snapshot = this.marketData.getSnapshot(sym);
+      const ageMs = snapshot?.dataAgeMs ?? -1;
+      const fresh = ageMs >= 0 && ageMs < MARKET_DATA_GAP_PAUSED_MS;
+      symbolHealth[sym] = { fresh, ageMs };
+      if (!fresh) marketDataHealthy = false;
+    }
+    const marketDataHealth = {
+      healthy: marketDataHealthy,
+      lastCheckedAt: now,
+      symbols: symbolHealth,
+    };
+
+    // ── Clock drift (last known value) ──
+    const clockDriftHealth = {
+      healthy: this.lastClockDriftMs < CLOCK_DRIFT_WARNING_MS,
+      driftMs: this.lastClockDriftMs,
+      lastCheckedAt: this.lastClockDriftCheckedAt?.toISOString() ?? 'never',
+    };
+
+    // ── Overall status ──
+    const allHealthy = dbHealth.healthy && redisHealth.healthy && exchHealth.healthy && marketDataHealthy;
+    const anyCritical = !dbHealth.healthy || !redisHealth.healthy;
+    const status = anyCritical ? 'error' : allHealthy ? 'ok' : 'degraded';
+
+    const buildInfo = getBuildInfo();
+
+    return {
+      status,
+      systemState: this.systemState,
+      tradingMode: this.tradingMode,
+      uptime: process.uptime(),
+      version: buildInfo.version,
+      checks: {
+        database: dbHealth,
+        redis: redisHealth,
+        exchange: exchHealth,
+        marketData: marketDataHealth,
+        clockDrift: clockDriftHealth,
+      },
+      buildInfo: {
+        gitCommit: buildInfo.gitCommit,
+        buildTimestamp: buildInfo.buildTimestamp,
+        environment: buildInfo.environment,
+        nodeVersion: buildInfo.nodeVersion,
+      },
+      timestamp: now,
+    };
+  }
+
+  /**
+   * Validate that all required service interfaces are present before startup.
+   * Aborts initialization if a critical method is missing.
+   */
+  private validateInterfaces(): void {
+    const execAsMap = this.executionOrch as unknown as Record<string, unknown>;
+    for (const method of ['execute', 'trackOpenOrders', 'cancelOrder']) {
+      if (typeof execAsMap[method] !== 'function') {
+        throw new Error(
+          `STARTUP ABORTED: ExecutionOrchestrator is missing required method: ${method}`,
+        );
+      }
+    }
+
+    const portfolioAsMap = this.portfolio as unknown as Record<string, unknown>;
+    for (const method of ['getRiskState', 'getSummary', 'incrementTradesHour', 'reconcile']) {
+      if (typeof portfolioAsMap[method] !== 'function') {
+        throw new Error(
+          `STARTUP ABORTED: PortfolioService is missing required method: ${method}`,
+        );
+      }
+    }
+
+    logger.info('Interface validation passed — all required methods present');
   }
 }

@@ -5,59 +5,67 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { describe, it, expect } from 'vitest';
-import { validateModelResponse } from '@cryptobot/decision-engine';
+import { validateAIAssessment } from '@cryptobot/decision-engine';
 import { RiskEngine } from '@cryptobot/risk-engine';
 import { SimulatedAdapter } from '@cryptobot/exchange';
 import {
   RiskVerdict,
   SystemState,
   TradeAction,
+  AIMarketRegime,
   DEFAULT_HOLD_DECISION,
 } from '@cryptobot/shared-types';
-
-const ALLOWED = ['BTCUSDT'];
 
 describe('Failure Scenarios', () => {
   // ── Model response failures ──
 
   describe('Invalid model responses', () => {
     it('should handle empty string from model', () => {
-      const result = validateModelResponse('', ALLOWED);
+      const result = validateAIAssessment('');
       expect(result.valid).toBe(false);
-      expect(result.decision.action).toBe(TradeAction.HOLD);
+      // Fallback uses DEFAULT_HOLD_ASSESSMENT — regime is RANGE
+      expect(result.assessment.regime).toBe(AIMarketRegime.RANGE);
     });
 
     it('should handle HTML response from model', () => {
-      const result = validateModelResponse('<html><body>Error 500</body></html>', ALLOWED);
+      const result = validateAIAssessment('<html><body>Error 500</body></html>');
       expect(result.valid).toBe(false);
     });
 
     it('should handle partial JSON from model', () => {
-      const result = validateModelResponse('{"action": "BUY", "symbol":', ALLOWED);
+      const result = validateAIAssessment('{"regime": "BULL_TREND", "entry_veto":');
       expect(result.valid).toBe(false);
     });
 
     it('should handle JSON with extra fields gracefully', () => {
       const raw = JSON.stringify({
-        action: 'HOLD', symbol: '', confidence: 0, entry_type: 'LIMIT',
-        entry_price: 0, size_quote: 0, stop_price: 0, take_profit_price: 0,
-        max_slippage_bps: 0, time_horizon_sec: 0,
-        thesis: 'No edge', invalidate_if: [],
+        regime: 'RANGE',
+        entry_veto: false,
+        entry_veto_reason: '',
+        should_exit: false,
+        exit_reason: null,
+        exit_thesis: '',
+        confidence: 0.5,
+        thesis: 'No edge visible. RANGE market. RSI 50.',
         extra_field: 'should be ignored',
         another_field: 42,
       });
-      const result = validateModelResponse(raw, ALLOWED);
+      const result = validateAIAssessment(raw);
       expect(result.valid).toBe(true); // Extra fields stripped by Zod
     });
 
     it('should handle unicode/emoji in thesis', () => {
       const raw = JSON.stringify({
-        action: 'HOLD', symbol: '', confidence: 0, entry_type: 'LIMIT',
-        entry_price: 0, size_quote: 0, stop_price: 0, take_profit_price: 0,
-        max_slippage_bps: 0, time_horizon_sec: 0,
-        thesis: '🚀 MOON! 📈💎🙌', invalidate_if: [],
+        regime: 'BULL_TREND',
+        entry_veto: false,
+        entry_veto_reason: '',
+        should_exit: false,
+        exit_reason: null,
+        exit_thesis: '',
+        confidence: 0.7,
+        thesis: '🚀 BULL_TREND confirmed. EMA diff +0.15%. RSI 48.',
       });
-      const result = validateModelResponse(raw, ALLOWED);
+      const result = validateAIAssessment(raw);
       expect(result.valid).toBe(true);
     });
   });

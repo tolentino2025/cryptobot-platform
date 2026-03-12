@@ -8,11 +8,13 @@ import type { PrismaClient } from '@prisma/client';
 import type { IExchangeAdapter } from '@cryptobot/exchange';
 import {
   PositionStatus,
+  ReconciliationStatus,
   type PortfolioSummary,
   type Position,
   type Balance,
   type ReconciliationResult,
   type RiskState,
+  type TradeLifecycle,
 } from '@cryptobot/shared-types';
 
 const logger = createLogger('portfolio');
@@ -433,6 +435,168 @@ export class PortfolioService {
       _sum: { realizedPnl: true },
     });
     return result._sum.realizedPnl ?? 0;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // TRADE LIFECYCLE — Create, update, and query
+  // ═══════════════════════════════════════════════════════
+
+  /** Create a new lifecycle record when an entry fill is confirmed. */
+  async createTradeLifecycle(data: {
+    tradeId: string;
+    decisionId: string;
+    symbol: string;
+    entryOrderId: string;
+    entryQtyRequested: number;
+    entryQtyFilled: number;
+    avgEntryPrice: number;
+    feesTotal: number;
+    slippageBps: number;
+    positionId: string;
+  }): Promise<string> {
+    const lc = await this.db.tradeLifecycle.create({
+      data: {
+        tradeId: data.tradeId,
+        decisionId: data.decisionId,
+        symbol: data.symbol,
+        entryOrderIds: [data.entryOrderId],
+        entryQtyRequested: data.entryQtyRequested,
+        entryQtyFilled: data.entryQtyFilled,
+        avgEntryPrice: data.avgEntryPrice,
+        feesTotal: data.feesTotal,
+        slippageBps: data.slippageBps,
+        positionId: data.positionId,
+        reconciliationStatus: ReconciliationStatus.PENDING,
+      },
+    });
+    logger.info({ lifecycleId: lc.id, tradeId: data.tradeId, symbol: data.symbol }, 'TradeLifecycle created');
+    return lc.id;
+  }
+
+  /**
+   * Finalize a lifecycle record when the position closes.
+   * Looks up by positionId — called immediately after closePosition().
+   */
+  async updateLifecycleOnExit(data: {
+    positionId: string;
+    exitOrderId: string;
+    exitQtyFilled: number;
+    avgExitPrice: number;
+    feesAdded: number;
+    realizedPnl: number;
+    closedReason: string;
+    positionSnapshot: Record<string, unknown>;
+  }): Promise<void> {
+    const lc = await this.db.tradeLifecycle.findFirst({
+      where: { positionId: data.positionId },
+    });
+    if (!lc) {
+      logger.warn({ positionId: data.positionId }, 'No TradeLifecycle found for closed position — skipping update');
+      return;
+    }
+
+    await this.db.tradeLifecycle.update({
+      where: { id: lc.id },
+      data: {
+        exitOrderIds: { push: data.exitOrderId },
+        exitQtyRequested: data.exitQtyFilled, // market exit: requested ≈ filled
+        exitQtyFilled: data.exitQtyFilled,
+        avgExitPrice: data.avgExitPrice,
+        feesTotal: lc.feesTotal + data.feesAdded,
+        realizedPnl: data.realizedPnl,
+        unrealizedPnl: 0,
+        closedReason: data.closedReason,
+        positionAfterTrade: data.positionSnapshot as unknown as import('@prisma/client').Prisma.InputJsonValue,
+        reconciliationStatus: ReconciliationStatus.RECONCILED,
+        lastReconciledAt: new Date(),
+      },
+    });
+    logger.info({ lifecycleId: lc.id, realizedPnl: data.realizedPnl }, 'TradeLifecycle finalized');
+  }
+
+  /** Update unrealized PnL on an open lifecycle (called during mark-to-market). */
+  async updateLifecycleUnrealized(positionId: string, unrealizedPnl: number): Promise<void> {
+    await this.db.tradeLifecycle.updateMany({
+      where: { positionId, reconciliationStatus: ReconciliationStatus.PENDING },
+      data: { unrealizedPnl },
+    });
+  }
+
+  /** List trade lifecycles — paginated. */
+  async getTradeLifecycles(limit = 20, offset = 0): Promise<TradeLifecycle[]> {
+    const rows = await this.db.tradeLifecycle.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset,
+    });
+    return rows.map((r) => this.mapLifecycle(r));
+  }
+
+  /** Get single lifecycle by ID. */
+  async getTradeLifecycleById(id: string): Promise<TradeLifecycle | null> {
+    const row = await this.db.tradeLifecycle.findUnique({ where: { id } });
+    return row ? this.mapLifecycle(row) : null;
+  }
+
+  /** Get total count of lifecycles by status. */
+  async getLifecycleStats(): Promise<Record<ReconciliationStatus, number>> {
+    const counts = await this.db.tradeLifecycle.groupBy({
+      by: ['reconciliationStatus'],
+      _count: { id: true },
+    });
+    const result = {
+      [ReconciliationStatus.PENDING]: 0,
+      [ReconciliationStatus.RECONCILED]: 0,
+      [ReconciliationStatus.DIVERGENT]: 0,
+      [ReconciliationStatus.MANUAL_REVIEW]: 0,
+    };
+    for (const row of counts) {
+      const status = row.reconciliationStatus as ReconciliationStatus;
+      result[status] = row._count.id;
+    }
+    return result;
+  }
+
+  private mapLifecycle(r: {
+    id: string; tradeId: string; decisionId: string; symbol: string;
+    entryOrderIds: string[]; exitOrderIds: string[];
+    entryQtyRequested: number; entryQtyFilled: number;
+    exitQtyRequested: number; exitQtyFilled: number;
+    avgEntryPrice: number; avgExitPrice: number | null;
+    feesTotal: number; slippageBps: number;
+    realizedPnl: number | null; unrealizedPnl: number | null;
+    positionId: string | null; positionAfterTrade: unknown;
+    closedReason: string | null;
+    reconciliationStatus: string;
+    lastReconciledAt: Date | null; reconciliationNotes: string | null;
+    createdAt: Date; updatedAt: Date;
+  }): TradeLifecycle {
+    return {
+      id: r.id,
+      tradeId: r.tradeId,
+      decisionId: r.decisionId,
+      symbol: r.symbol,
+      entryOrderIds: r.entryOrderIds,
+      exitOrderIds: r.exitOrderIds,
+      entryQtyRequested: r.entryQtyRequested,
+      entryQtyFilled: r.entryQtyFilled,
+      exitQtyRequested: r.exitQtyRequested,
+      exitQtyFilled: r.exitQtyFilled,
+      avgEntryPrice: r.avgEntryPrice,
+      avgExitPrice: r.avgExitPrice,
+      feesTotal: r.feesTotal,
+      slippageBps: r.slippageBps,
+      realizedPnl: r.realizedPnl,
+      unrealizedPnl: r.unrealizedPnl,
+      positionId: r.positionId,
+      positionAfterTrade: r.positionAfterTrade as Record<string, unknown> | null,
+      closedReason: r.closedReason,
+      reconciliationStatus: r.reconciliationStatus as ReconciliationStatus,
+      lastReconciledAt: r.lastReconciledAt,
+      reconciliationNotes: r.reconciliationNotes,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
   }
 
   /** Reconcile local state with exchange */
