@@ -1,0 +1,31 @@
+# ═══════════════════════════════════════════════════════════════
+# Dockerfile — CryptoBot API Server
+# ═══════════════════════════════════════════════════════════════
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+COPY package.json package-lock.json* turbo.json tsconfig.base.json ./
+COPY packages/ packages/
+COPY apps/api/ apps/api/
+
+RUN npm ci --workspace=@cryptobot/api --include-workspace-root
+RUN npx turbo run build --filter=@cryptobot/api
+
+# ── Production image ──
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/package.json ./apps/api/
+
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -qO- http://localhost:3001/health || exit 1
+
+CMD ["node", "apps/api/dist/index.js"]

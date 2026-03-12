@@ -1,0 +1,230 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Squad: Crypto Trading Squad
+# Domain: Automated Cryptocurrency Trading
+# Created: 2026-03-12
+# Version: 1.0.0
+# ═══════════════════════════════════════════════════════════════════════════════
+
+squad:
+  name: crypto-trading-squad
+  display_name: "Crypto Trading Squad"
+  version: "1.0.0"
+  domain: "Automated Cryptocurrency Trading"
+  description: |
+    Professional multi-agent trading desk for automated cryptocurrency trading.
+    Covers the full trading lifecycle: market intelligence → technical analysis →
+    strategy generation → risk validation → trade execution → portfolio management
+    → performance evaluation.
+
+  philosophy: |
+    "Capital preservation first. Consistent small gains compound into exceptional results."
+    This is NOT a gambling system. It is a professional trading desk architecture
+    where every decision is logged, validated, and risk-controlled. No trade is
+    ever placed without passing through the full validation pipeline.
+
+  safety_rules:
+    - Never risk more than 1% of capital per trade
+    - Avoid trading during extreme volatility events (VIX-equivalent > threshold)
+    - Halt all trading if portfolio drawdown exceeds 10%
+    - Log every agent decision with full reasoning chain
+    - Maintain full transparency — no black-box decisions
+
+  keywords:
+    - crypto
+    - trading
+    - bitcoin
+    - binance
+    - bybit
+    - coinbase
+    - technical-analysis
+    - risk-management
+    - portfolio
+    - execution
+    - strategy
+    - performance
+    - multi-agent
+
+  entry_agent: market-intelligence-agent
+  created_by: "aiox-squad-creator"
+  created_at: "2026-03-12"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER ARCHITECTURE
+# ─────────────────────────────────────────────────────────────────────────────
+
+tiers:
+  tier_0:
+    name: "Intelligence & Analysis"
+    agents:
+      - market-intelligence-agent
+      - technical-analysis-agent
+    purpose: "Gather and process market data to build situational awareness"
+
+  tier_1:
+    name: "Decision Making"
+    agents:
+      - strategy-agent
+      - risk-manager-agent
+    purpose: "Convert analysis into validated, risk-approved trade proposals"
+
+  tier_2:
+    name: "Execution & Management"
+    agents:
+      - execution-agent
+      - portfolio-manager-agent
+    purpose: "Execute approved trades and manage capital allocation in real-time"
+
+  tier_3:
+    name: "Evaluation & Optimization"
+    agents:
+      - performance-analyst-agent
+    purpose: "Measure outcomes and continuously optimize the system"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT REGISTRY
+# ─────────────────────────────────────────────────────────────────────────────
+
+agents:
+  market-intelligence-agent:
+    file: agents/market-intelligence-agent.md
+    tier: 0
+    icon: "📡"
+    focus: "Macro conditions, sentiment, volatility events, liquidity shifts"
+    outputs:
+      - market_sentiment_score
+      - volatility_classification
+      - macro_bias
+
+  technical-analysis-agent:
+    file: agents/technical-analysis-agent.md
+    tier: 0
+    icon: "📊"
+    focus: "Price action, indicators (RSI/MACD/MA/ATR), support/resistance, trends"
+    outputs:
+      - trend_direction
+      - momentum_signals
+      - key_price_levels
+
+  strategy-agent:
+    file: agents/strategy-agent.md
+    tier: 1
+    icon: "🎯"
+    focus: "Trade setup generation, entry/exit signals, confidence scoring"
+    outputs:
+      - trade_opportunity_proposal
+      - confidence_score
+      - trade_type
+
+  risk-manager-agent:
+    file: agents/risk-manager-agent.md
+    tier: 1
+    icon: "🛡️"
+    focus: "Position sizing, exposure control, drawdown protection"
+    outputs:
+      - approved_trade_size
+      - risk_approval_status
+      - rejection_reason
+
+  execution-agent:
+    file: agents/execution-agent.md
+    tier: 2
+    icon: "⚡"
+    focus: "Order placement, stop-loss, take-profit, trailing stops"
+    outputs:
+      - execution_confirmation
+      - order_id
+      - fill_price
+
+  portfolio-manager-agent:
+    file: agents/portfolio-manager-agent.md
+    tier: 2
+    icon: "💼"
+    focus: "Capital allocation, open positions, PnL tracking, rebalancing"
+    outputs:
+      - portfolio_status
+      - allocation_snapshot
+      - rebalance_actions
+
+  performance-analyst-agent:
+    file: agents/performance-analyst-agent.md
+    tier: 3
+    icon: "📈"
+    focus: "Win rate, Sharpe ratio, profit factor, strategy drift detection"
+    outputs:
+      - daily_report
+      - weekly_report
+      - optimization_suggestions
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORKFLOW
+# ─────────────────────────────────────────────────────────────────────────────
+
+workflow:
+  name: trading-loop
+  type: continuous
+  cycle:
+    - step: 1
+      agent: market-intelligence-agent
+      task: market-scan.md
+      output_to: strategy-agent
+    - step: 2
+      agent: technical-analysis-agent
+      task: technical-analysis.md
+      output_to: strategy-agent
+    - step: 3
+      agent: strategy-agent
+      task: generate-trade-setup.md
+      depends_on: [market-intelligence-agent, technical-analysis-agent]
+      output_to: risk-manager-agent
+    - step: 4
+      agent: risk-manager-agent
+      task: validate-risk.md
+      depends_on: [strategy-agent]
+      output_to: execution-agent
+      gate: approval_required
+    - step: 5
+      agent: execution-agent
+      task: execute-trade.md
+      depends_on: [risk-manager-agent]
+      condition: risk_approved == true
+      output_to: portfolio-manager-agent
+    - step: 6
+      agent: portfolio-manager-agent
+      task: portfolio-review.md
+      runs: always
+      output_to: performance-analyst-agent
+    - step: 7
+      agent: performance-analyst-agent
+      task: performance-report.md
+      schedule: "daily + weekly"
+      output_to: strategy-agent
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISK PARAMETERS (Global)
+# ─────────────────────────────────────────────────────────────────────────────
+
+risk_parameters:
+  max_risk_per_trade_pct: 1.0
+  max_open_trades: 5
+  max_portfolio_exposure_pct: 30.0
+  max_drawdown_halt_pct: 10.0
+  min_confidence_score: 70
+  avoid_trading_on:
+    - extreme_volatility
+    - low_liquidity_hours
+    - major_macro_events
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUPPORTED EXCHANGES
+# ─────────────────────────────────────────────────────────────────────────────
+
+exchanges:
+  - name: Binance
+    type: spot_and_futures
+    api_version: v3
+  - name: Bybit
+    type: spot_and_derivatives
+    api_version: v5
+  - name: Coinbase
+    type: spot
+    api_version: advanced_trade

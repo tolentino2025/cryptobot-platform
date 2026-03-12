@@ -1,0 +1,46 @@
+# Risk Parameters — crypto-trading-squad
+# These are the single source of truth for all risk rules.
+# Changing values here propagates to all agents.
+
+capital:
+  base_currency: USDT
+  initial_capital: null  # Set by user at initialization
+
+per_trade:
+  max_risk_pct: 1.0         # Maximum % of capital at risk per trade
+  min_rr_ratio: 2.0         # Minimum reward-to-risk ratio
+  min_confidence: 70        # Minimum confidence score to generate proposal
+
+portfolio:
+  max_open_trades: 5
+  max_total_exposure_pct: 30.0
+  max_single_asset_pct: 15.0
+  max_net_directional_exposure_pct: 20.0
+
+drawdown:
+  warning_pct: 5.0           # Trigger: reduce sizes 50%, increase min confidence
+  halt_pct: 10.0             # Trigger: halt all trading, require manual review
+  daily_loss_limit_pct: 3.0  # Trigger: halt for rest of calendar day
+
+volatility_adjustments:
+  high_volatility:
+    position_size_multiplier: 0.70  # 30% reduction
+    min_confidence_override: 75
+  extreme_volatility:
+    action: halt_trading
+
+losing_streak:
+  streak_3_size_multiplier: 0.50    # 50% size reduction
+  streak_5_action: halt_and_review  # Full halt, request performance review
+
+exit_management:
+  tp1_close_pct: 50          # Close 50% at TP1
+  tp2_close_pct: 30          # Close 30% at TP2 (of original)
+  tp3_trail_pct: 20          # Trail remaining 20%
+  trailing_stop_atr_multiple: 1.5   # Trail at 1.5x ATR
+  breakeven_on_tp1: true     # Move stop to entry after TP1 hit
+
+slippage:
+  acceptable_pct: 0.1
+  alert_pct: 0.3
+  abort_pct: 0.5

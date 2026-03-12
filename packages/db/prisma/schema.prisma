@@ -1,0 +1,395 @@
+// ═══════════════════════════════════════════════════════════════
+// CRYPTOBOT PLATFORM — Prisma Schema
+// 17 tables covering full system state, audit, and operations
+// ═══════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── 1. Bot Configuration ──────────────────────────────────────
+
+model BotConfig {
+  id                  String   @id @default(cuid())
+  mode                String   @default("SIM") // SIM | DEMO | LIVE
+  exchange            String   @default("SIMULATED")
+  decisionIntervalSec Int      @default(15)
+  claudeModel         String   @default("claude-sonnet-4-20250514")
+  claudeTimeoutMs     Int      @default(5000)
+  claudeMaxRetries    Int      @default(1)
+  version             Int      @default(1)
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("bot_config")
+}
+
+// ── 2. Strategy Configuration ─────────────────────────────────
+
+model StrategyConfig {
+  id               String   @id @default(cuid())
+  name             String   @default("Micro Pullback")
+  type             String   @default("MICRO_PULLBACK")
+  emaFastPeriod    Int      @default(9)
+  emaSlowPeriod    Int      @default(21)
+  rsiPeriod        Int      @default(7)
+  rsiOversold      Float    @default(40)
+  rsiOverbought    Float    @default(60)
+  atrPeriod        Int      @default(14)
+  minVolumeRatio   Float    @default(1.2)
+  minBookImbalance Float    @default(0.6)
+  minConfidence    Float    @default(0.5)
+  takeProfitBps    Int      @default(30)
+  stopLossBps      Int      @default(20)
+  timeoutSeconds   Int      @default(300)
+  candleInterval   String   @default("1m")
+  lookbackCandles  Int      @default(60)
+  version          Int      @default(1)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("strategy_config")
+}
+
+// ── 3. Risk Limits ────────────────────────────────────────────
+
+model RiskLimits {
+  id                           String   @id @default(cuid())
+  maxPositionNotional          Float    @default(100)
+  maxTotalExposureNotional     Float    @default(200)
+  maxOpenPositions             Int      @default(1)
+  maxDailyLoss                 Float    @default(20)
+  maxWeeklyLoss                Float    @default(50)
+  maxTradesPerHour             Int      @default(4)
+  maxConsecutiveLosses         Int      @default(3)
+  cooldownAfterLossMinutes     Int      @default(30)
+  maxSpreadBps                 Float    @default(15)
+  maxSlippageBps               Float    @default(10)
+  allowedSymbols               String[] @default(["BTCUSDT"])
+  allowedSessions              String[] @default(["*"])
+  dataFreshnessMaxMs           Int      @default(5000)
+  maxOrderRetries              Int      @default(2)
+  killOnExchangeDesync         Boolean  @default(true)
+  killOnMarketDataGap          Boolean  @default(true)
+  killOnUnexpectedPosition     Boolean  @default(true)
+  killOnRepeatedRejections     Boolean  @default(true)
+  noTradeDuringIncident        Boolean  @default(true)
+  noTradeWhenBalanceBelowThreshold Boolean @default(true)
+  minBalanceThreshold          Float    @default(10)
+  minConfidence                Float    @default(0.5)
+  allowPyramiding              Boolean  @default(false)
+  version                      Int      @default(1)
+  isActive                     Boolean  @default(true)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  @@map("risk_limits")
+}
+
+// ── 4. Symbols ────────────────────────────────────────────────
+
+model Symbol {
+  id                String   @id @default(cuid())
+  symbol            String   @unique
+  baseAsset         String
+  quoteAsset        String
+  minNotional       Float    @default(10)
+  stepSize          Float    @default(0.00001)
+  pricePrecision    Int      @default(2)
+  quantityPrecision Int      @default(5)
+  enabled           Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("symbols")
+}
+
+// ── 5. Market Snapshots ───────────────────────────────────────
+
+model MarketSnapshot {
+  id        String   @id @default(cuid())
+  symbol    String
+  /// Compressed snapshot data (JSON)
+  data      Json
+  dataAgeMs Int
+  isFresh   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([symbol, createdAt])
+  @@map("market_snapshots")
+}
+
+// ── 6. Model Decisions ────────────────────────────────────────
+
+model ModelDecision {
+  id             String   @id @default(cuid())
+  requestId      String
+  symbol         String
+  /// The structured decision from Claude
+  decision       Json
+  /// Summarized input context sent to Claude
+  inputSummary   Json
+  /// Raw response text for debugging
+  rawResponse    String   @db.Text
+  isValid        Boolean
+  isFallback     Boolean  @default(false)
+  fallbackReason String?
+  latencyMs      Int
+  model          String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  riskReview     RiskReview?
+  orderRequests  OrderRequest[]
+
+  @@index([symbol, createdAt])
+  @@index([requestId])
+  @@map("model_decisions")
+}
+
+// ── 7. Risk Reviews ───────────────────────────────────────────
+
+model RiskReview {
+  id              String   @id @default(cuid())
+  decisionId      String   @unique
+  requestId       String
+  verdict         String   // APPROVED | ADJUSTED | DENIED
+  denialReasons   String[] @default([])
+  adjustedParams  Json?
+  explanation     String   @db.Text
+  checksPerformed Json
+  createdAt       DateTime @default(now())
+
+  decision        ModelDecision @relation(fields: [decisionId], references: [id])
+
+  @@index([requestId])
+  @@index([verdict, createdAt])
+  @@map("risk_reviews")
+}
+
+// ── 8. Order Requests ─────────────────────────────────────────
+
+model OrderRequest {
+  id              String   @id @default(cuid())
+  idempotencyKey  String   @unique
+  decisionId      String
+  riskReviewId    String
+  requestId       String
+  symbol          String
+  side            String   // BUY | SELL
+  type            String   // LIMIT | MARKET
+  quantity        Float
+  price           Float?
+  quoteAmount     Float
+  stopPrice       Float?
+  takeProfitPrice Float?
+  maxSlippageBps  Int
+  timeoutSec      Int
+  purpose         String   // ENTRY | EXIT_TP | EXIT_SL | etc.
+  status          String   @default("PENDING")
+  exchangeOrderId String?
+  retryCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  decision        ModelDecision @relation(fields: [decisionId], references: [id])
+  events          OrderEvent[]
+  fills           Fill[]
+
+  @@index([symbol, createdAt])
+  @@index([status])
+  @@index([requestId])
+  @@index([exchangeOrderId])
+  @@map("order_requests")
+}
+
+// ── 9. Order Events ───────────────────────────────────────────
+
+model OrderEvent {
+  id             String   @id @default(cuid())
+  orderId        String
+  requestId      String
+  previousStatus String?
+  newStatus      String
+  exchangeData   Json?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  order          OrderRequest @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+// ── 10. Fills ─────────────────────────────────────────────────
+
+model Fill {
+  id              String   @id @default(cuid())
+  orderId         String
+  requestId       String
+  symbol          String
+  side            String
+  price           Float
+  quantity        Float
+  quoteAmount     Float
+  commission      Float    @default(0)
+  commissionAsset String   @default("USDT")
+  exchangeTradeId String
+  isMaker         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  order           OrderRequest @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([symbol, createdAt])
+  @@map("fills")
+}
+
+// ── 11. Positions ─────────────────────────────────────────────
+
+model Position {
+  id                     String    @id @default(cuid())
+  symbol                 String
+  side                   String    // LONG | SHORT
+  status                 String    @default("OPEN")
+  entryOrderId           String
+  entryPrice             Float
+  quantity               Float
+  notional               Float
+  currentPrice           Float?
+  unrealizedPnl          Float?
+  unrealizedPnlPercent   Float?
+  exitOrderId            String?
+  exitOrderSentAt        DateTime?
+  exitPrice              Float?
+  exitReason             String?
+  realizedPnl            Float?
+  realizedPnlPercent     Float?
+  totalCommission        Float     @default(0)
+  openedAt               DateTime  @default(now())
+  closedAt               DateTime?
+  holdingTimeSec         Int?
+  decisionId             String
+
+  @@index([symbol, status])
+  @@index([status])
+  @@index([openedAt])
+  @@map("positions")
+}
+
+// ── 12. Balances ──────────────────────────────────────────────
+
+model Balance {
+  id             String   @id @default(cuid())
+  asset          String
+  free           Float
+  locked         Float
+  total          Float
+  estimatedValue Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([asset, createdAt])
+  @@map("balances")
+}
+
+// ── 13. PnL Snapshots ─────────────────────────────────────────
+
+model PnlSnapshot {
+  id              String   @id @default(cuid())
+  period          String   // TRADE | HOURLY | DAILY | WEEKLY
+  periodKey       String
+  realizedPnl     Float    @default(0)
+  unrealizedPnl   Float    @default(0)
+  totalPnl        Float    @default(0)
+  tradeCount      Int      @default(0)
+  winCount        Int      @default(0)
+  lossCount       Int      @default(0)
+  totalCommission Float    @default(0)
+  bestTradePnl    Float    @default(0)
+  worstTradePnl   Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  @@unique([period, periodKey])
+  @@index([period, createdAt])
+  @@map("pnl_snapshots")
+}
+
+// ── 14. Incidents ─────────────────────────────────────────────
+
+model Incident {
+  id              String    @id @default(cuid())
+  requestId       String
+  type            String
+  severity        String
+  title           String
+  description     String    @db.Text
+  actionTaken     String
+  relatedEntity   String?
+  context         Json      @default("{}")
+  isActive        Boolean   @default(true)
+  resolvedAt      DateTime?
+  resolutionNotes String?
+  createdAt       DateTime  @default(now())
+
+  @@index([type, createdAt])
+  @@index([severity, isActive])
+  @@map("incidents")
+}
+
+// ── 15. Admin Actions ─────────────────────────────────────────
+
+model AdminAction {
+  id         String   @id @default(cuid())
+  actionType String
+  payload    Json     @default("{}")
+  reason     String
+  /// Who performed it (token identifier or IP)
+  performedBy String  @default("system")
+  createdAt  DateTime @default(now())
+
+  @@index([actionType, createdAt])
+  @@map("admin_actions")
+}
+
+// ── 16. Audit Log ─────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  requestId String
+  tradeId   String?
+  eventType String
+  source    String
+  payload   Json     @default("{}")
+  summary   String
+  severity  String   @default("INFO")
+  createdAt DateTime @default(now())
+
+  @@index([eventType, createdAt])
+  @@index([requestId])
+  @@index([tradeId])
+  @@index([severity, createdAt])
+  @@map("audit_log")
+}
+
+// ── 17. System State ──────────────────────────────────────────
+
+model SystemState {
+  id            String   @id @default(cuid())
+  state         String   @default("INITIALIZING")
+  previousState String?
+  reason        String?
+  triggeredBy   String   @default("system")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now())
+
+  @@index([state, createdAt])
+  @@map("system_state")
+}

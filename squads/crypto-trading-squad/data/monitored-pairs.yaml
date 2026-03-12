@@ -1,0 +1,39 @@
+# Monitored Trading Pairs — crypto-trading-squad
+
+pairs:
+  tier_1:
+    - symbol: BTC/USDT
+      exchange: Binance
+      min_confidence: 70
+      allowed_types: [scalping, intraday, swing]
+
+    - symbol: ETH/USDT
+      exchange: Binance
+      min_confidence: 70
+      allowed_types: [scalping, intraday, swing]
+
+  tier_2:
+    - symbol: SOL/USDT
+      exchange: Binance
+      min_confidence: 72
+      allowed_types: [intraday, swing]
+
+    - symbol: BNB/USDT
+      exchange: Binance
+      min_confidence: 72
+      allowed_types: [intraday, swing]
+
+    - symbol: AVAX/USDT
+      exchange: Bybit
+      min_confidence: 75
+      allowed_types: [swing]
+
+    - symbol: ADA/USDT
+      exchange: Binance
+      min_confidence: 75
+      allowed_types: [swing]
+
+  correlation_groups:
+    group_1: [BTC, ETH]
+    group_2: [ETH, AVAX, SOL]
+    group_3: [BNB]

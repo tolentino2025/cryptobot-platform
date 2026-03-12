@@ -1,0 +1,193 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Workflow: Trading Loop
+# Squad: crypto-trading-squad
+# Type: Continuous / Cyclic
+# ═══════════════════════════════════════════════════════════════════════════════
+
+workflow:
+  name: trading-loop
+  display_name: "Crypto Trading Loop"
+  type: continuous
+  version: "1.0.0"
+  description: |
+    The core operating loop of the crypto-trading-squad. Runs continuously,
+    cycling through intelligence gathering, analysis, strategy generation,
+    risk validation, execution, portfolio management, and performance review.
+    The loop repeats on a configurable interval (default: every 15 minutes).
+
+  cycle_interval_minutes: 15
+  market_hours: "24/7 (crypto never closes)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOOP PHASES
+# ─────────────────────────────────────────────────────────────────────────────
+
+phases:
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_1_intelligence:
+    name: "Market Intelligence Scan"
+    agent: market-intelligence-agent
+    task: market-scan.md
+    parallel_with: phase_2_analysis
+    outputs:
+      - market_intelligence_report
+    next:
+      on_success: phase_3_strategy
+      on_extreme_volatility: "HALT — broadcast halt to all phases"
+      on_failure: "log_error, retry once, then halt"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_2_analysis:
+    name: "Technical Analysis"
+    agent: technical-analysis-agent
+    task: technical-analysis.md
+    parallel_with: phase_1_intelligence
+    inputs:
+      - "monitored_pairs from data/monitored-pairs.yaml"
+    outputs:
+      - technical_analysis_report (one per monitored pair)
+    next:
+      on_success: phase_3_strategy
+      on_failure: "log_error, skip to portfolio monitoring"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_3_strategy:
+    name: "Strategy Generation"
+    agent: strategy-agent
+    task: generate-trade-setup.md
+    depends_on: [phase_1_intelligence, phase_2_analysis]
+    gate:
+      condition: "market_intelligence_report.trading_allowed == true"
+      on_fail: "Skip to phase_6_portfolio — no setups generated when trading halted"
+    inputs:
+      - market_intelligence_report
+      - technical_analysis_reports[]
+    outputs:
+      - trade_proposals[] (filtered by confidence_score >= 70)
+    next:
+      on_proposals_found: phase_4_risk
+      on_no_valid_setups: phase_6_portfolio
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_4_risk:
+    name: "Risk Validation"
+    agent: risk-manager-agent
+    task: validate-risk.md
+    depends_on: phase_3_strategy
+    inputs:
+      - trade_proposals[]
+      - portfolio_status (from portfolio-manager-agent)
+    outputs:
+      - risk_decisions[] (APPROVED or REJECTED per proposal)
+    processing: "Process proposals sequentially — each approval updates portfolio state"
+    next:
+      on_approvals_found: phase_5_execution
+      on_all_rejected: phase_6_portfolio
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_5_execution:
+    name: "Trade Execution"
+    agent: execution-agent
+    task: execute-trade.md
+    depends_on: phase_4_risk
+    inputs:
+      - risk_decisions[] (only APPROVED)
+    outputs:
+      - execution_reports[]
+    execution_model: "Sequential — one trade at a time to avoid race conditions"
+    next:
+      always: phase_6_portfolio
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_6_portfolio:
+    name: "Portfolio Review"
+    agent: portfolio-manager-agent
+    task: portfolio-review.md
+    runs: always
+    inputs:
+      - execution_reports[] (if any)
+    outputs:
+      - portfolio_status
+    next:
+      always: phase_7_performance_check
+      on_warning_or_critical: "Alert risk-manager-agent immediately"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  phase_7_performance_check:
+    name: "Performance Monitoring"
+    agent: performance-analyst-agent
+    schedule:
+      continuous_check: true
+      daily_report: "00:00 UTC"
+      weekly_report: "Sunday 00:00 UTC"
+    inputs:
+      - portfolio_status
+    outputs:
+      - performance_alerts (if drift or threshold crossed)
+      - daily_report (scheduled)
+      - weekly_report (scheduled)
+    next:
+      always: "loop_back_to_phase_1"
+      on_critical_drift: "Notify user, reduce strategy-agent confidence threshold"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HALT CONDITIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+halt_conditions:
+  immediate_halt:
+    - condition: "portfolio drawdown >= 10%"
+      source: portfolio-manager-agent
+      action: "Stop loop, notify user, require manual resume"
+
+    - condition: "volatility_classification == extreme"
+      source: market-intelligence-agent
+      action: "Skip phases 3-5, only monitor"
+
+    - condition: "daily_loss_pct >= 3%"
+      source: portfolio-manager-agent
+      action: "Halt for remainder of calendar day"
+
+  warning_conditions:
+    - condition: "portfolio drawdown >= 5%"
+      action: "Reduce position sizes by 50%, increase min confidence to 80"
+
+    - condition: "volatility_classification == high"
+      action: "Reduce position sizes by 30%, increase min confidence to 75"
+
+    - condition: "3 consecutive losing trades"
+      action: "Reduce position sizes by 50% for next 5 trades"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MONITORED PAIRS
+# ─────────────────────────────────────────────────────────────────────────────
+
+monitored_pairs:
+  tier_1_majors:
+    - BTC/USDT
+    - ETH/USDT
+  tier_2_large_caps:
+    - SOL/USDT
+    - BNB/USDT
+    - AVAX/USDT
+    - ADA/USDT
+  tier_3_selective:
+    - "Pairs selected by market-intelligence-agent based on volume and momentum"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────────────────────────────────────
+
+logging:
+  level: "INFO"
+  destination: "logs/trading-loop.log"
+  include_per_cycle:
+    - cycle_id
+    - timestamp_start
+    - timestamp_end
+    - phases_completed
+    - proposals_generated
+    - proposals_approved
+    - trades_executed
+    - portfolio_status_summary
+    - alerts_triggered

@@ -1,0 +1,34 @@
+{
+  "name": "cryptobot-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated spot trading platform with AI-powered decision engine",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "db:generate": "npm run --workspace=packages/db generate",
+    "db:migrate": "npm run --workspace=packages/db migrate",
+    "db:seed": "npm run --workspace=packages/db seed",
+    "db:studio": "npm run --workspace=packages/db studio",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "prettier": "^3.3.0",
+    "eslint": "^9.15.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.0.0"
+}
