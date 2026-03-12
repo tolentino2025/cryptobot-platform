@@ -11,3 +11,4 @@ coverage/
 .DS_Store
 prisma/*.db
 prisma/migrations/**/migration_lock.toml
+*.tsbuildinfo
