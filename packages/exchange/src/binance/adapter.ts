@@ -255,6 +255,8 @@ export class BinanceAdapter implements IExchangeAdapter {
         averagePrice: parseFloat(res.executedQty) > 0
           ? parseFloat(res.cummulativeQuoteQty) / parseFloat(res.executedQty)
           : null,
+        commission: 0,
+        commissionAsset: 'BNB',
         errorCode: null,
         errorMessage: null,
         timestamp: Date.now(),
@@ -413,6 +415,10 @@ export class BinanceAdapter implements IExchangeAdapter {
       avgPrice = cumQuoteQty / executedQty;
     }
 
+    // Sum commission across all fills (present only for FULL response type)
+    const commission = res.fills?.reduce((s, f) => s + parseFloat(f.commission), 0) ?? 0;
+    const commissionAsset = res.fills?.[0]?.commissionAsset ?? 'BNB';
+
     return {
       success: true,
       exchangeOrderId: String(res.orderId),
@@ -420,6 +426,8 @@ export class BinanceAdapter implements IExchangeAdapter {
       filledQuantity: executedQty,
       filledQuoteAmount: cumQuoteQty,
       averagePrice: avgPrice,
+      commission,
+      commissionAsset,
       errorCode: null,
       errorMessage: null,
       timestamp: res.transactTime,
@@ -439,6 +447,8 @@ export class BinanceAdapter implements IExchangeAdapter {
       filledQuantity: executedQty,
       filledQuoteAmount: cumQuoteQty,
       averagePrice: avgPrice,
+      commission: 0, // Query response doesn't include fill details — commission tracked via WS fills
+      commissionAsset: 'BNB',
       errorCode: null,
       errorMessage: null,
       timestamp: res.updateTime,
@@ -475,6 +485,8 @@ export class BinanceAdapter implements IExchangeAdapter {
       filledQuantity: 0,
       filledQuoteAmount: 0,
       averagePrice: null,
+      commission: 0,
+      commissionAsset: 'BNB',
       errorCode,
       errorMessage,
       timestamp: Date.now(),

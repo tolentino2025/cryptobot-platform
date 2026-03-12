@@ -30,6 +30,8 @@ export interface ServerDependencies {
   getTradingMode: () => TradingMode;
   setTradingMode: (mode: TradingMode, confirmationCode?: string) => Promise<void>;
   getHealth: () => Promise<SystemHealthReport>;
+  /** Close all open positions at market price immediately */
+  emergencyLiquidateAll: (reason: string) => Promise<void>;
 }
 
 export async function createServer(deps: ServerDependencies) {
@@ -100,10 +102,22 @@ export async function createServer(deps: ServerDependencies) {
   app.post('/system/kill', async (request) => {
     const body = AdminActionRequestSchema.parse(request.body);
     const reqId = (request as any).requestId;
+    // setSystemState(KILLED) triggers liquidateAllPositions internally in the orchestrator
     await deps.setSystemState(SystemState.KILLED, body.reason);
     await deps.audit.recordAdminAction(reqId, AdminActionType.KILL, { reason: body.reason }, 'api');
     await deps.notifications.critical('KILL SWITCH', `Kill switch activated: ${body.reason}`);
-    return { success: true, state: SystemState.KILLED, message: 'System killed. Restart required.' };
+    return { success: true, state: SystemState.KILLED, message: 'System killed. All positions liquidated. Restart required.' };
+  });
+
+  // Emergency liquidate without full kill — closes all positions but keeps system running
+  app.post('/positions/emergency-liquidate', async (request) => {
+    const body = AdminActionRequestSchema.parse(request.body);
+    const reqId = (request as any).requestId;
+    await deps.emergencyLiquidateAll(body.reason);
+    await deps.audit.recordAdminAction(
+      reqId, AdminActionType.KILL, { reason: body.reason, action: 'emergency_liquidate' }, 'api',
+    );
+    return { success: true, message: 'Emergency liquidation initiated. Check logs for results.' };
   });
 
   // ════════════════════════════════════════

@@ -24,6 +24,7 @@ import {
   AuditEventType,
   IncidentType,
   IncidentSeverity,
+  OrderSide,
   NON_TRADING_STATES,
   ALLOWED_STATE_TRANSITIONS,
   type ModelDecision,
@@ -150,6 +151,7 @@ export class MainOrchestrator {
       audit: this.audit,
       portfolio: this.portfolio,
       notifications: this.notifications,
+      liquidateAllPositions: (reason: string) => this.liquidateAllPositions(reason),
     };
   }
 
@@ -201,6 +203,10 @@ export class MainOrchestrator {
     logger.info({ from: oldState, to: newState, reason }, `State: ${oldState} → ${newState}`);
 
     if (newState === SystemState.KILLED) {
+      // Emergency liquidation before stopping — ensures no open positions remain
+      await this.liquidateAllPositions(`Kill switch activated: ${reason}`).catch((err) => {
+        logger.error({ err }, 'Emergency liquidation failed during kill switch — proceeding with stop');
+      });
       await this.stop();
     }
   }
@@ -315,6 +321,85 @@ export class MainOrchestrator {
     await this.marketData.stop();
     await this.adapter.disconnect();
     logger.info('Orchestrator stopped');
+  }
+
+  /**
+   * Emergency liquidation — immediately close ALL open positions at market price.
+   * Called by kill switch and /positions/emergency-liquidate endpoint.
+   * Continues even if individual position closes fail; collects all errors.
+   */
+  async liquidateAllPositions(reason: string): Promise<void> {
+    logger.error({ reason }, '⚠ EMERGENCY LIQUIDATION — closing all open positions at market');
+
+    const openPositions = await this.db.position.findMany({
+      where: { status: { in: ['OPEN', 'EXIT_PENDING'] } },
+    });
+
+    if (openPositions.length === 0) {
+      logger.info('Emergency liquidation: no open positions found');
+      return;
+    }
+
+    const reqId = generateRequestId();
+    const errors: string[] = [];
+
+    for (const pos of openPositions) {
+      try {
+        const side = pos.side === 'LONG' ? OrderSide.SELL : OrderSide.BUY;
+        // Use unique clientOrderId to avoid idempotency collisions
+        const clientOrderId = `emrg_${pos.id.slice(-8)}_${Date.now()}`;
+
+        const response = await this.adapter.placeOrder({
+          symbol: pos.symbol,
+          side,
+          type: EntryType.MARKET,
+          quantity: pos.quantity,
+          price: null,
+          clientOrderId,
+        });
+
+        if (response.success) {
+          const fillPrice = response.averagePrice ?? pos.entryPrice;
+          await this.portfolio.closePosition(
+            pos.id, clientOrderId, fillPrice, ExitReason.KILL_SWITCH, response.commission ?? 0,
+          );
+          logger.info(
+            { positionId: pos.id, symbol: pos.symbol, fillPrice, side },
+            'Emergency liquidation: position closed',
+          );
+        } else {
+          const msg = `${pos.symbol}: ${response.errorMessage ?? 'unknown error'}`;
+          errors.push(msg);
+          logger.error({ positionId: pos.id, error: response.errorMessage }, 'Emergency liquidation: order rejected');
+        }
+      } catch (err) {
+        const msg = `${pos.symbol}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error({ positionId: pos.id, error: msg }, 'Emergency liquidation: exception');
+      }
+    }
+
+    await this.audit.record({
+      requestId: reqId,
+      tradeId: null,
+      eventType: AuditEventType.SYSTEM_STOP,
+      source: 'emergency_liquidation',
+      payload: { reason, positionCount: openPositions.length, errors },
+      summary: `Emergency liquidation: ${openPositions.length} positions, ${errors.length} errors. Reason: ${reason}`,
+      severity: errors.length > 0 ? 'CRITICAL' : 'WARN',
+    });
+
+    if (errors.length > 0) {
+      await this.notifications.critical(
+        'EMERGENCY LIQUIDATION INCOMPLETE',
+        `${errors.length}/${openPositions.length} positions failed to close:\n${errors.join('\n')}`,
+      );
+    } else {
+      await this.notifications.critical(
+        'EMERGENCY LIQUIDATION COMPLETE',
+        `All ${openPositions.length} open positions closed. Reason: ${reason}`,
+      );
+    }
   }
 
   /** Main decision loop — runs on every tick */
@@ -475,14 +560,56 @@ export class MainOrchestrator {
     );
 
     // Step 7: Determine final action
-    //   Priority: EXIT > BUY > HOLD
-    //   - EXIT: AI signals should_exit AND a position is open
-    //   - BUY:  DeterministicEntryEngine approves AND AI does not veto AND no open position
-    //   - HOLD: everything else
+    //   Priority: SL/TP override > EXIT(AI) > BUY > HOLD
+    //   - SL/TP: price deterministically crossed stop/take-profit threshold
+    //   - EXIT:  AI signals should_exit AND a position is open
+    //   - BUY:   DeterministicEntryEngine approves AND AI does not veto AND no open position
+    //   - HOLD:  everything else
 
     let finalDecision: ModelDecision | null = null;
 
-    if (assessmentRecord.assessment.should_exit && hasPosition) {
+    // ── Step 7a: Deterministic SL/TP override ──
+    // Fires before AI to protect positions even when Claude is slow or unavailable.
+    // Note: this is soft SL/TP (checked each cycle). For hard exchange-side SL/TP,
+    // OCO orders must be implemented on top of this.
+    if (hasPosition && currentPos && !this.exitingSymbols.has(symbol)) {
+      const entryOrder = await this.db.orderRequest.findUnique({
+        where: { id: currentPos.entryOrderId },
+        select: { stopPrice: true, takeProfitPrice: true },
+      });
+      const price = snapshot.ticker.last;
+      const isLong = currentPos.side === 'LONG';
+      const sl = entryOrder?.stopPrice ?? 0;
+      const tp = entryOrder?.takeProfitPrice ?? 0;
+      const slHit = sl > 0 && (isLong ? price <= sl : price >= sl);
+      const tpHit = tp > 0 && (isLong ? price >= tp : price <= tp);
+
+      if (slHit || tpHit) {
+        const exitReason = slHit ? ExitReason.STOP_LOSS : ExitReason.TAKE_PROFIT;
+        logger.warn(
+          { symbol, price, sl, tp, side: currentPos.side, exitReason },
+          `${exitReason} triggered — forcing deterministic EXIT`,
+        );
+        finalDecision = {
+          action: TradeAction.EXIT,
+          symbol,
+          confidence: 1.0,
+          entry_type: EntryType.MARKET,
+          entry_price: price,
+          size_quote: 0,
+          stop_price: 0,
+          take_profit_price: 0,
+          max_slippage_bps: 15,
+          time_horizon_sec: 30,
+          thesis: `[DETERMINISTIC] ${exitReason} — ${isLong ? 'LONG' : 'SHORT'} price=${price} SL=${sl} TP=${tp}`,
+          invalidate_if: [],
+          exit_reason: exitReason,
+        };
+      }
+    }
+
+    // ── Step 7b: AI exit signal (skipped if SL/TP already forced exit) ──
+    if (!finalDecision && assessmentRecord.assessment.should_exit && hasPosition) {
       // AI signalled exit — build EXIT decision
       finalDecision = {
         action: TradeAction.EXIT,
@@ -509,7 +636,10 @@ export class MainOrchestrator {
         },
         `AI exit signal: ${finalDecision.exit_reason}`,
       );
-    } else if (!hasPosition && !assessmentRecord.assessment.entry_veto) {
+    }
+
+    // ── Step 7c: Deterministic entry (only when no exit decision and no open position) ──
+    if (!finalDecision && !hasPosition && !assessmentRecord.assessment.entry_veto) {
       // No position — evaluate deterministic entry conditions
       const entryCandidate = this.deterministicEntry.evaluate(
         context.features,

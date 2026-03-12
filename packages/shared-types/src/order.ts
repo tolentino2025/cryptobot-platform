@@ -116,6 +116,10 @@ export interface ExchangeOrderResponse {
   filledQuantity: number;
   filledQuoteAmount: number;
   averagePrice: number | null;
+  /** Total commission paid across all fills (in commissionAsset units) */
+  commission: number;
+  /** Asset used for commission payment (e.g. BNB, USDT, BTC) */
+  commissionAsset: string;
   errorCode: string | null;
   errorMessage: string | null;
   timestamp: number;

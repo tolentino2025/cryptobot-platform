@@ -254,17 +254,26 @@ export class PortfolioService {
       },
     });
 
-    // Update risk counters in Redis
-    const redis = getRedis();
+    // Update risk counters in Redis — non-blocking: Redis failure must NOT prevent position close
     const pnlDelta = realizedPnl - commission;
-    await redis.incrbyfloat(KEY_DAILY_PNL, pnlDelta);
-    await redis.incrbyfloat(KEY_WEEKLY_PNL, pnlDelta);
-    await redis.set(KEY_LAST_TRADE, Date.now().toString());
+    try {
+      const redis = getRedis();
+      await redis.incrbyfloat(KEY_DAILY_PNL, pnlDelta);
+      await redis.incrbyfloat(KEY_WEEKLY_PNL, pnlDelta);
+      await redis.set(KEY_LAST_TRADE, Date.now().toString());
 
-    if (pnlDelta < 0) {
-      await redis.incr(KEY_CONSEC_LOSSES);
-    } else {
-      await redis.set(KEY_CONSEC_LOSSES, '0');
+      if (pnlDelta < 0) {
+        await redis.incr(KEY_CONSEC_LOSSES);
+      } else {
+        await redis.set(KEY_CONSEC_LOSSES, '0');
+      }
+    } catch (redisError) {
+      // Redis is unavailable — counters will be re-initialized from DB on next startup.
+      // The position close itself is already persisted to DB, so this is safe to ignore.
+      logger.error(
+        { positionId, redisError, pnlDelta },
+        'Redis unavailable when updating risk counters — counters will resync on restart',
+      );
     }
 
     logger.info(
@@ -276,17 +285,49 @@ export class PortfolioService {
 
   /** Get current risk state for the Risk Engine */
   async getRiskState(): Promise<RiskState> {
-    const redis = getRedis();
-    const [dailyPnl, weeklyPnl, tradesHour, consecLosses, cooldownUntil, lastTrade, activeIncidents] =
-      await Promise.all([
+    // Fetch Redis counters with fallback to DB-computed values if Redis is unreachable
+    let dailyPnl: string | null = null;
+    let weeklyPnl: string | null = null;
+    let tradesHour: string | null = null;
+    let consecLosses: string | null = null;
+    let cooldownUntil: string | null = null;
+    let lastTrade: string | null = null;
+
+    try {
+      const redis = getRedis();
+      [dailyPnl, weeklyPnl, tradesHour, consecLosses, cooldownUntil, lastTrade] = await Promise.all([
         redis.get(KEY_DAILY_PNL),
         redis.get(KEY_WEEKLY_PNL),
         redis.get(KEY_TRADES_HOUR),
         redis.get(KEY_CONSEC_LOSSES),
         redis.get(KEY_COOLDOWN),
         redis.get(KEY_LAST_TRADE),
-        this.db.incident.count({ where: { isActive: true } }),
       ]);
+    } catch (redisError) {
+      // Redis unavailable — fall back to DB for critical counters.
+      // This is degraded mode: trades may still fire but risk limits use DB state.
+      logger.error({ redisError }, 'Redis unavailable in getRiskState — using DB fallback');
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const [dailyResult, recentLosses] = await Promise.all([
+        this.db.position.aggregate({
+          where: { status: 'CLOSED', closedAt: { gte: today } },
+          _sum: { realizedPnl: true },
+        }),
+        this.db.position.findMany({
+          where: { status: 'CLOSED' },
+          orderBy: { closedAt: 'desc' },
+          take: 10,
+          select: { realizedPnl: true },
+        }),
+      ]);
+      dailyPnl = String(dailyResult._sum.realizedPnl ?? 0);
+      let streak = 0;
+      for (const p of recentLosses) { if ((p.realizedPnl ?? 0) < 0) streak++; else break; }
+      consecLosses = String(streak);
+    }
+
+    const activeIncidents = await this.db.incident.count({ where: { isActive: true } });
 
     const openPositions = await this.db.position.findMany({
       where: { status: { in: [PositionStatus.OPEN, PositionStatus.EXIT_PENDING] } },
@@ -316,17 +357,25 @@ export class PortfolioService {
 
   /** Increment trades this hour */
   async incrementTradesHour(): Promise<void> {
-    const redis = getRedis();
-    const count = await redis.incr(KEY_TRADES_HOUR);
-    if (count === 1) {
-      await redis.expire(KEY_TRADES_HOUR, 3600);
+    try {
+      const redis = getRedis();
+      const count = await redis.incr(KEY_TRADES_HOUR);
+      if (count === 1) {
+        await redis.expire(KEY_TRADES_HOUR, 3600);
+      }
+    } catch (redisError) {
+      logger.error({ redisError }, 'Redis unavailable — could not increment trades-per-hour counter');
     }
   }
 
   /** Set cooldown */
   async setCooldown(minutes: number): Promise<void> {
     const until = Date.now() + minutes * 60 * 1000;
-    await getRedis().set(KEY_COOLDOWN, until.toString());
+    try {
+      await getRedis().set(KEY_COOLDOWN, until.toString());
+    } catch (redisError) {
+      logger.error({ redisError, minutes }, 'Redis unavailable — could not set cooldown');
+    }
     logger.warn({ cooldownMinutes: minutes, until: new Date(until).toISOString() }, 'Cooldown activated');
   }
 

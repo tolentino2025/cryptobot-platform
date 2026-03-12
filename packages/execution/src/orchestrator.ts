@@ -204,7 +204,8 @@ export class ExecutionOrchestrator {
     const order = await this.db.orderRequest.findUnique({ where: { id: orderId } });
     if (!order) return;
 
-    // Record fill
+    // Record fill — commission comes from exchange fills[] (REST FULL response or WS executionReport)
+    const entryCommission = response.commission ?? 0;
     await this.db.fill.create({
       data: {
         orderId,
@@ -214,8 +215,8 @@ export class ExecutionOrchestrator {
         price: response.averagePrice ?? order.price ?? 0,
         quantity: response.filledQuantity,
         quoteAmount: response.filledQuoteAmount,
-        commission: 0, // TODO: extract from exchange response
-        commissionAsset: 'USDT',
+        commission: entryCommission,
+        commissionAsset: response.commissionAsset ?? 'BNB',
         exchangeTradeId: response.exchangeOrderId ?? `fill_${Date.now()}`,
         isMaker: order.type === 'LIMIT',
       },
@@ -245,7 +246,7 @@ export class ExecutionOrchestrator {
         quantity: response.filledQuantity,
         notional: response.filledQuoteAmount,
         decisionId: order.decisionId,
-        commission: 0,
+        commission: entryCommission,
       });
 
       eventBus.emit('position:opened', {
@@ -271,7 +272,7 @@ export class ExecutionOrchestrator {
         entryQtyRequested: order.quantity,
         entryQtyFilled: response.filledQuantity,
         avgEntryPrice: fillPrice,
-        feesTotal: 0, // TODO: extract from exchange response when available
+        feesTotal: entryCommission,
         slippageBps: Math.max(0, slippageBps), // only count adverse slippage
         positionId,
       });
@@ -504,7 +505,8 @@ export class ExecutionOrchestrator {
     quantity: number,
     response: ExchangeOrderResponse,
   ): Promise<void> {
-    // Create fill record
+    // Create fill record — commission from exchange response fills[]
+    const exitCommission = response.commission ?? 0;
     await this.db.fill.create({
       data: {
         orderId,
@@ -514,8 +516,8 @@ export class ExecutionOrchestrator {
         price: fillPrice,
         quantity,
         quoteAmount: fillPrice * quantity,
-        commission: 0,
-        commissionAsset: 'USDT',
+        commission: exitCommission,
+        commissionAsset: response.commissionAsset ?? 'BNB',
         exchangeTradeId: response.exchangeOrderId ?? `exit_fill_${Date.now()}`,
         isMaker: false,
       },
@@ -538,8 +540,8 @@ export class ExecutionOrchestrator {
     const order = await this.db.orderRequest.findUnique({ where: { id: orderId }, select: { purpose: true } });
     const exitReason = (order?.purpose ?? ExitReason.AI_EXIT) as ExitReason;
 
-    // Close the position
-    const realizedPnl = await this.portfolio.closePosition(positionId, orderId, fillPrice, exitReason, 0);
+    // Close the position — deduct commission from realized PnL
+    const realizedPnl = await this.portfolio.closePosition(positionId, orderId, fillPrice, exitReason, exitCommission);
 
     eventBus.emit('position:closed', { positionId, pnl: realizedPnl, reason: exitReason });
 
@@ -552,7 +554,7 @@ export class ExecutionOrchestrator {
         exitOrderId: orderId,
         exitQtyFilled: quantity,
         avgExitPrice: fillPrice,
-        feesAdded: 0, // TODO: extract from exchange response
+        feesAdded: exitCommission,
         realizedPnl,
         closedReason: exitReason,
         positionSnapshot: {

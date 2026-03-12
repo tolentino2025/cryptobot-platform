@@ -93,6 +93,10 @@ export class SimulatedAdapter implements IExchangeAdapter {
       'SIM order filled',
     );
 
+    // Simulate 0.1% commission (Binance standard taker fee)
+    const commissionRate = 0.001;
+    const commission = params.quantity * fillPrice * commissionRate;
+
     return {
       success: true,
       exchangeOrderId: orderId,
@@ -100,6 +104,8 @@ export class SimulatedAdapter implements IExchangeAdapter {
       filledQuantity: params.quantity,
       filledQuoteAmount: params.quantity * fillPrice,
       averagePrice: fillPrice,
+      commission,
+      commissionAsset: 'USDT',
       errorCode: null,
       errorMessage: null,
       timestamp: Date.now(),
@@ -136,6 +142,8 @@ export class SimulatedAdapter implements IExchangeAdapter {
       filledQuantity: 0,
       filledQuoteAmount: 0,
       averagePrice: null,
+      commission: 0,
+      commissionAsset: 'USDT',
       errorCode: null,
       errorMessage: null,
       timestamp: Date.now(),
@@ -152,6 +160,8 @@ export class SimulatedAdapter implements IExchangeAdapter {
       filledQuantity: order?.filledQuantity ?? 0,
       filledQuoteAmount: order?.filledQuoteAmount ?? 0,
       averagePrice: order?.averagePrice ?? null,
+      commission: 0,
+      commissionAsset: 'USDT',
       errorCode: order ? null : 'NOT_FOUND',
       errorMessage: order ? null : 'Order not found in simulator',
       timestamp: Date.now(),

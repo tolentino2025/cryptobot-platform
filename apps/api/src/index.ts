@@ -88,6 +88,7 @@ async function main() {
       getTradingMode: () => orchestrator.getTradingMode(),
       setTradingMode: (mode, code) => orchestrator.setTradingMode(mode, code),
       getHealth: () => orchestrator.getHealth(),
+      emergencyLiquidateAll: (reason) => services.liquidateAllPositions(reason),
     });
 
     // 6. Start HTTP server
