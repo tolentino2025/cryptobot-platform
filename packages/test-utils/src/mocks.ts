@@ -29,6 +29,8 @@ export class MockExchangeAdapter implements IExchangeAdapter {
       filledQuantity: params.quantity,
       filledQuoteAmount: params.quantity * (params.price ?? 50000),
       averagePrice: params.price ?? 50000,
+      commission: 0,
+      commissionAsset: 'USDT',
       errorCode: null,
       errorMessage: null,
       timestamp: Date.now(),
@@ -41,6 +43,7 @@ export class MockExchangeAdapter implements IExchangeAdapter {
     return {
       success: true, exchangeOrderId: id, status: OrderStatus.CANCELLED,
       filledQuantity: 0, filledQuoteAmount: 0, averagePrice: null,
+      commission: 0, commissionAsset: 'USDT',
       errorCode: null, errorMessage: null, timestamp: Date.now(), raw: {},
     };
   }
@@ -50,6 +53,7 @@ export class MockExchangeAdapter implements IExchangeAdapter {
     return {
       success: true, exchangeOrderId: id, status: OrderStatus.FILLED,
       filledQuantity: 0, filledQuoteAmount: 0, averagePrice: null,
+      commission: 0, commissionAsset: 'USDT',
       errorCode: null, errorMessage: null, timestamp: Date.now(), raw: {},
     };
   }

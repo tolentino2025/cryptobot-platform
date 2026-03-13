@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, CardHeader, Badge, EmptyState, DS } from './ui';
+import { Card, CardHeader, Badge, EmptyState, DS, DataPill } from './ui';
 import { fmt } from '@/lib/fmt';
 
 type Pos = Record<string, unknown>;
@@ -224,6 +224,11 @@ export function PositionStatusCard({
     0
   );
   const closedTrades = lifecycles.filter((lc) => lc.realizedPnl != null);
+  const latestOrder = orders[0] ?? null;
+  const latestOrderStatus = asStr(latestOrder?.status) ?? 'NONE';
+  const latestOrderSide = asStr(latestOrder?.side) ?? '—';
+  const latestLifecycle = lifecycles[0] ?? null;
+  const latestLifecyclePnl = asNum(latestLifecycle?.realizedPnl);
 
   return (
     <Card>
@@ -249,6 +254,66 @@ export function PositionStatusCard({
       />
 
       <div className="p-5 space-y-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <DataPill
+            label="Execution state"
+            value={openPositions.length > 0 ? 'In market' : 'Flat'}
+            tone={openPositions.length > 0 ? DS.profit : DS.textSec}
+          />
+          <DataPill
+            label="Latest order"
+            value={latestOrderStatus}
+            tone={
+              latestOrderStatus === 'FILLED' ? DS.profit :
+              latestOrderStatus === 'REJECTED' || latestOrderStatus === 'CANCELLED' ? DS.loss :
+              latestOrderStatus === 'NONE' ? DS.textSec :
+              DS.info
+            }
+          />
+          <DataPill
+            label="Order side"
+            value={latestOrder ? latestOrderSide : '—'}
+            tone={latestOrderSide === 'BUY' ? DS.profit : latestOrderSide === 'SELL' ? DS.loss : DS.textSec}
+          />
+          <DataPill
+            label="Last trade PnL"
+            value={latestLifecyclePnl != null ? fmt.usd(latestLifecyclePnl) : '—'}
+            tone={latestLifecyclePnl == null ? DS.textSec : latestLifecyclePnl >= 0 ? DS.profit : DS.loss}
+          />
+        </div>
+
+        <div
+          className="rounded-xl p-3.5"
+          style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
+        >
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: DS.textMuted }}>
+                Order queue
+              </div>
+              <div className="text-sm font-semibold mt-1" style={{ color: DS.text }}>
+                {orders.length > 0 ? `${orders.length} recent orders logged` : 'No order submitted yet'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: DS.textMuted }}>
+                Trade lifecycle
+              </div>
+              <div className="text-sm font-semibold mt-1" style={{ color: DS.text }}>
+                {closedTrades.length > 0 ? `${closedTrades.length} closed trades available` : 'Awaiting first completed trade'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: DS.textMuted }}>
+                Live exposure
+              </div>
+              <div className="text-sm font-semibold mt-1" style={{ color: openPositions.length > 0 ? DS.profit : DS.text }}>
+                {openPositions.length > 0 ? fmt.usd(exposure) : 'No active exposure'}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Open positions */}
         {openPositions.length === 0 ? (
           <div

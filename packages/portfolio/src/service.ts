@@ -682,20 +682,24 @@ export class PortfolioService {
 
       for (const local of localBalances) {
         const remote = exchangeBalances.find((b) => b.asset === local.asset);
-        if (remote) {
-          const diff = Math.abs(remote.total - local.total);
-          if (diff > 0.01) { // Tolerance
-            balanceDiscrepancies.push({
-              asset: local.asset,
-              localBalance: local.total,
-              exchangeBalance: remote.total,
-              difference: diff,
-            });
-          }
+        if (!remote) continue;
+
+        const diff = Math.abs(remote.total - local.total);
+        const baseline = Math.max(Math.abs(local.total), Math.abs(remote.total), 1);
+        const diffRatio = diff / baseline;
+
+        if (diffRatio > 0.01) {
+          balanceDiscrepancies.push({
+            asset: local.asset,
+            localBalance: local.total,
+            exchangeBalance: remote.total,
+            difference: diff,
+          });
         }
       }
 
       if (balanceDiscrepancies.length > 0) {
+        requiresSafeMode = true;
         logger.warn({ balanceDiscrepancies }, 'Balance discrepancies found');
       }
 

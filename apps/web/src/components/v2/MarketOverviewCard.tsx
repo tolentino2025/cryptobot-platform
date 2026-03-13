@@ -33,14 +33,11 @@ function asStr(v: unknown): string | undefined {
 }
 
 export function MarketOverviewCard({ latestDecision }: Props) {
-  // Extract regime from multiple possible paths
-  const decisionObj = latestDecision?.decision as Record<string, unknown> | null ?? null;
   const regime =
     asStr(latestDecision?.regime) ??
-    asStr(decisionObj?.regime) ??
     null;
 
-  // Extract market data from inputSummary
+  // Extract market data from flattened overview payload
   const summary = latestDecision?.inputSummary as Record<string, unknown> | null ?? null;
   const rsi          = asNum(summary?.rsi);
   const spreadBps    = asNum(summary?.spreadBps);
@@ -54,6 +51,8 @@ export function MarketOverviewCard({ latestDecision }: Props) {
 
   const regCfg = regime ? (REGIME_CFG[regime.toUpperCase()] ?? REGIME_CFG.NEUTRAL) : null;
   const assessedAt = asStr(latestDecision?.createdAt as string);
+  const holdReason = asStr(latestDecision?.holdReason);
+  const hasAssessment = Boolean(regime || summary || assessedAt);
 
   // Derive readable RSI zone
   const rsiZone =
@@ -119,12 +118,34 @@ export function MarketOverviewCard({ latestDecision }: Props) {
       />
 
       <div className="p-5 space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: 'Mid', value: mid != null ? fmt.usd(mid, 2) : '—', color: DS.text },
+            { label: 'RSI', value: rsi != null ? fmt.num(rsi, 1) : '—', color: rsiColor },
+            { label: 'Spread', value: spreadBps != null ? `${fmt.num(spreadBps, 2)} bps` : '—', color: spreadColor },
+            { label: 'Volume', value: volumeRatio != null ? `${fmt.num(volumeRatio, 2)}x` : '—', color: volColor },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-xl p-3"
+              style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
+            >
+              <div className="text-[9px] uppercase tracking-[0.16em]" style={{ color: DS.textMuted }}>
+                {item.label}
+              </div>
+              <div className="mt-1 text-base font-bold" style={{ color: item.color, fontFamily: DS.mono }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* Regime badge — hero element */}
         {regCfg && regime ? (
           <div
-            className="rounded-lg p-4 flex flex-col gap-1"
+            className="rounded-xl p-4 flex flex-col gap-1.5"
             style={{
-              background: `${regCfg.color}08`,
+              background: `linear-gradient(135deg, ${regCfg.color}12, rgba(255,255,255,0.01))`,
               border: `1px solid ${regCfg.color}20`,
             }}
           >
@@ -154,6 +175,23 @@ export function MarketOverviewCard({ latestDecision }: Props) {
             <div className="text-xs" style={{ color: DS.textSec }}>
               {regCfg.desc}
             </div>
+            {holdReason && (
+              <div className="text-xs mt-1" style={{ color: DS.textMuted }}>
+                {holdReason}
+              </div>
+            )}
+          </div>
+        ) : hasAssessment ? (
+          <div
+            className="rounded-lg p-4"
+            style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
+          >
+            <div className="text-sm font-medium" style={{ color: DS.textSec }}>
+              Assessment received, but regime details are incomplete
+            </div>
+            <div className="text-xs mt-1" style={{ color: DS.textMuted }}>
+              {holdReason ?? 'The backend returned a partial market assessment payload.'}
+            </div>
           </div>
         ) : (
           <div
@@ -166,21 +204,6 @@ export function MarketOverviewCard({ latestDecision }: Props) {
             <div className="text-xs mt-1" style={{ color: DS.textMuted }}>
               Waiting for first AI evaluation cycle
             </div>
-          </div>
-        )}
-
-        {/* Mid price */}
-        {mid != null && (
-          <div className="flex items-baseline gap-2">
-            <span
-              className="text-2xl font-bold"
-              style={{ color: DS.text, fontFamily: DS.mono }}
-            >
-              {fmt.usd(mid, 2)}
-            </span>
-            <span className="text-xs" style={{ color: DS.textSec }}>
-              {symbol} mid price
-            </span>
           </div>
         )}
 

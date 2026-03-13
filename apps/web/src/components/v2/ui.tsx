@@ -6,21 +6,23 @@ import React from 'react';
 // Design System tokens — institutional trading desk palette
 // ─────────────────────────────────────────────────────────────────
 export const DS = {
-  bg:           '#070D16',
-  surface:      '#0C1824',
-  elevated:     '#112030',
-  border:       '#1C2E40',
-  borderActive: '#26405A',
+  bg:           '#061018',
+  surface:      'rgba(7, 18, 28, 0.82)',
+  elevated:     'rgba(12, 28, 41, 0.94)',
+  border:       'rgba(111, 145, 171, 0.20)',
+  borderActive: 'rgba(143, 187, 222, 0.48)',
+  panel:        'rgba(15, 34, 49, 0.96)',
+  panel2:       'rgba(11, 24, 36, 0.98)',
 
-  text:         '#C4D6E8',
-  textSec:      '#5C7A90',
-  textMuted:    '#283C50',
+  text:         '#E7F1FA',
+  textSec:      '#A1B8CA',
+  textMuted:    '#5F788C',
 
   profit:       '#22C55E',
   loss:         '#EF4444',
   warning:      '#F59E0B',
   info:         '#3B82F6',
-  purple:       '#8B5CF6',
+  purple:       '#D97706',
   teal:         '#14B8A6',
 
   // Semantic backgrounds
@@ -28,7 +30,7 @@ export const DS = {
   lossBg:       'rgba(239,68,68,0.08)',
   warningBg:    'rgba(245,158,11,0.08)',
   infoBg:       'rgba(59,130,246,0.08)',
-  purpleBg:     'rgba(139,92,246,0.08)',
+  purpleBg:     'rgba(217,119,6,0.08)',
 
   // Semantic borders
   profitBorder: 'rgba(34,197,94,0.2)',
@@ -36,8 +38,8 @@ export const DS = {
   warningBorder:'rgba(245,158,11,0.2)',
   infoBorder:   'rgba(59,130,246,0.2)',
 
-  font:  "'Inter', system-ui, sans-serif",
-  mono:  "'JetBrains Mono', 'Fira Code', monospace",
+  font:  "'Manrope', 'Space Grotesk', system-ui, sans-serif",
+  mono:  "'IBM Plex Mono', 'JetBrains Mono', monospace",
 } as const;
 
 // Severity → color mapping
@@ -66,9 +68,10 @@ export function Card({
     <div
       className={`rounded-xl overflow-hidden ${className}`}
       style={{
-        background: DS.surface,
+        background: `linear-gradient(180deg, ${DS.surface} 0%, ${DS.panel2} 100%)`,
         border: `1px solid ${DS.border}`,
-        boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        backdropFilter: 'blur(18px)',
+        boxShadow: '0 20px 70px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.03)',
         ...(accent ? { borderTop: `2px solid ${accent}` } : {}),
         ...style,
       }}
@@ -94,18 +97,18 @@ export function CardHeader({
 }) {
   return (
     <div
-      className="flex items-center justify-between px-5 py-3.5 border-b"
-      style={{ borderColor: DS.border }}
+      className="flex items-center justify-between px-5 py-4 border-b"
+      style={{ borderColor: DS.border, background: 'linear-gradient(180deg, rgba(255,255,255,0.02), transparent)' }}
     >
       <div className="flex items-center gap-3">
         <div className="w-0.5 h-4 rounded-full flex-shrink-0" style={{ background: accent }} />
         <div>
           <div
-            className="text-xs font-semibold uppercase tracking-wider"
-            style={{ color: DS.text, letterSpacing: '0.08em' }}
-          >
-            {title}
-          </div>
+          className="text-xs font-semibold uppercase tracking-wider"
+          style={{ color: DS.text, letterSpacing: '0.12em' }}
+        >
+          {title}
+        </div>
           {subtitle && (
             <div className="text-[10px] mt-0.5" style={{ color: DS.textSec }}>
               {subtitle}
@@ -114,6 +117,74 @@ export function CardHeader({
         </div>
       </div>
       {right && <div className="flex items-center gap-2">{right}</div>}
+    </div>
+  );
+}
+
+export function DataPill({
+  label,
+  value,
+  tone = DS.info,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+}) {
+  return (
+    <div
+      className="rounded-xl px-3 py-2.5 min-w-0"
+      style={{
+        background: `${tone}10`,
+        border: `1px solid ${tone}24`,
+        boxShadow: `inset 0 1px 0 ${tone}12`,
+      }}
+    >
+      <div className="text-[9px] uppercase tracking-[0.16em]" style={{ color: DS.textMuted }}>
+        {label}
+      </div>
+      <div
+        className="text-sm font-bold truncate"
+        style={{ color: tone, fontFamily: DS.mono }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+export function FlowStep({
+  label,
+  state,
+  detail,
+  tone,
+}: {
+  label: string;
+  state: string;
+  detail?: string;
+  tone: string;
+}) {
+  return (
+    <div
+      className="rounded-xl p-3 min-w-0"
+      style={{
+        background: `linear-gradient(180deg, ${tone}14, rgba(255,255,255,0.01))`,
+        border: `1px solid ${tone}26`,
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-[0.16em]" style={{ color: DS.textMuted }}>
+          {label}
+        </span>
+        <StatusDot color={tone} pulse={tone === DS.profit || tone === DS.info} />
+      </div>
+      <div className="mt-1 text-sm font-bold" style={{ color: tone, fontFamily: DS.mono }}>
+        {state}
+      </div>
+      {detail && (
+        <div className="mt-1 text-[11px] leading-relaxed" style={{ color: DS.textSec }}>
+          {detail}
+        </div>
+      )}
     </div>
   );
 }

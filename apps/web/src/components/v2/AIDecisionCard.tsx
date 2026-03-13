@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, CardHeader, Badge, ScoreBar, EmptyState, DS, LatencyChip, StatusDot } from './ui';
+import { Card, CardHeader, Badge, ScoreBar, EmptyState, DS, LatencyChip, DataPill } from './ui';
 import { fmt } from '@/lib/fmt';
 
 type Decision = Record<string, unknown>;
@@ -24,6 +24,14 @@ const VERDICT_CFG: Record<string, { color: string }> = {
   APPROVED: { color: DS.profit },
   DENIED:   { color: DS.loss   },
   PENDING:  { color: DS.warning},
+};
+
+const STAGE_CFG: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  AI_VETO: { label: 'Stopped at AI', color: DS.warning, bg: DS.warningBg, border: DS.warningBorder },
+  ENTRY_RULES_FAILED: { label: 'Stopped at Entry', color: DS.info, bg: DS.infoBg, border: DS.infoBorder },
+  RISK_DENIED: { label: 'Stopped at Risk', color: DS.loss, bg: DS.lossBg, border: DS.lossBorder },
+  EXECUTION_FAILED: { label: 'Stopped at Execution', color: DS.loss, bg: DS.lossBg, border: DS.lossBorder },
+  EXECUTED: { label: 'Order Sent', color: DS.profit, bg: DS.profitBg, border: DS.profitBorder },
 };
 
 // ─── Timeline dot for recent decisions ───────────────────────────
@@ -54,8 +62,7 @@ export function AIDecisionCard({ decisions }: Props) {
   const latest = decisions[0] ?? null;
 
   // ── Extract all fields from latest decision ──────────────────
-  const decisionObj = latest?.decision as Record<string, unknown> | null ?? null;
-  const summary     = latest?.inputSummary as Record<string, unknown> | null ?? null;
+  const summary = latest?.inputSummary as Record<string, unknown> | null ?? null;
 
   const action     = asStr(latest?.action)  ?? 'HOLD';
   const confidence = asNum(latest?.confidence) ?? 0;
@@ -63,14 +70,17 @@ export function AIDecisionCard({ decisions }: Props) {
   const verdict    = asStr(latest?.verdict);
   const latencyMs  = asNum(latest?.latencyMs);
   const createdAt  = asStr(latest?.createdAt);
+  const holdReason = asStr(latest?.holdReason);
+  const fallbackReason = asStr(latest?.fallbackReason);
+  const pipelineStage = asStr(latest?.pipelineStageStoppedAt);
+  const failedEntryConditions = Array.isArray(latest?.failedEntryConditions)
+    ? latest.failedEntryConditions.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : [];
 
-  const regime =
-    asStr(latest?.regime) ??
-    asStr(decisionObj?.regime) ??
-    null;
+  const regime = asStr(latest?.regime) ?? null;
 
-  const entryVeto = Boolean(decisionObj?.entry_veto ?? latest?.entry_veto);
-  const shouldExit = Boolean(decisionObj?.should_exit ?? latest?.should_exit);
+  const entryVeto = Boolean(latest?.entryVeto);
+  const shouldExit = Boolean(latest?.shouldExit);
 
   // ── Derive 6 signal scores from available data ───────────────
   const rsi         = asNum(summary?.rsi);
@@ -97,6 +107,12 @@ export function AIDecisionCard({ decisions }: Props) {
 
   const actionCfg  = ACTION_CFG[action] ?? ACTION_CFG.HOLD;
   const verdictCfg = verdict ? (VERDICT_CFG[verdict] ?? { color: DS.textSec }) : null;
+  const stageCfg = pipelineStage ? (STAGE_CFG[pipelineStage] ?? {
+    label: pipelineStage.replaceAll('_', ' '),
+    color: DS.textSec,
+    bg: DS.elevated,
+    border: DS.border,
+  }) : null;
 
   // ── Latency severity ─────────────────────────────────────────
   const latencyColor =
@@ -128,6 +144,29 @@ export function AIDecisionCard({ decisions }: Props) {
       />
 
       <div className="p-5 space-y-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <DataPill
+            label="AI action"
+            value={actionCfg.label}
+            tone={actionCfg.color}
+          />
+          <DataPill
+            label="Pipeline"
+            value={stageCfg?.label ?? (entryVeto ? 'AI vetoed' : 'Advancing')}
+            tone={stageCfg?.color ?? (entryVeto ? DS.warning : DS.profit)}
+          />
+          <DataPill
+            label="Confidence"
+            value={`${confScore}%`}
+            tone={confScore >= 80 ? DS.profit : confScore >= 50 ? DS.warning : DS.loss}
+          />
+          <DataPill
+            label="Latency"
+            value={latencyMs != null ? fmt.latency(latencyMs) : '—'}
+            tone={latencyColor}
+          />
+        </div>
+
         {/* ── Decision hero row ── */}
         <div className="flex items-start gap-4">
           {/* Action badge */}
@@ -218,6 +257,44 @@ export function AIDecisionCard({ decisions }: Props) {
           </div>
         )}
 
+        <div
+          className="rounded-xl p-3.5"
+          style={{
+            background: stageCfg?.bg ?? DS.elevated,
+            border: `1px solid ${stageCfg?.border ?? DS.border}`,
+          }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.24em]" style={{ color: DS.textMuted }}>
+                Pipeline status
+              </div>
+              <div className="text-sm font-semibold mt-1" style={{ color: stageCfg?.color ?? DS.text }}>
+                {stageCfg?.label ?? 'Assessment produced successfully'}
+              </div>
+            </div>
+            {pipelineStage && (
+              <Badge label={pipelineStage.replaceAll('_', ' ')} color={stageCfg?.color ?? DS.textSec} size="xs" />
+            )}
+          </div>
+          <p className="text-xs leading-relaxed mt-2" style={{ color: DS.textSec }}>
+            {fallbackReason ?? holdReason ?? thesis ?? 'No blocking reason recorded for this cycle.'}
+          </p>
+          {failedEntryConditions.length > 0 && (
+            <div className="grid gap-2 mt-3 md:grid-cols-2">
+              {failedEntryConditions.slice(0, 4).map((condition) => (
+                <div
+                  key={condition}
+                  className="rounded-lg px-3 py-2 text-[11px]"
+                  style={{ background: DS.panel2, border: `1px solid ${DS.border}`, color: DS.textSec }}
+                >
+                  {condition}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* ── Signal scores ── */}
         <div
           className="rounded-lg p-3.5 space-y-2"
@@ -265,7 +342,7 @@ export function AIDecisionCard({ decisions }: Props) {
             style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
           >
             <div className="text-[10px] uppercase tracking-widest mb-1.5" style={{ color: DS.textMuted }}>
-              Thesis
+              Decision thesis
             </div>
             <p className="text-xs leading-relaxed" style={{ color: DS.textSec }}>
               {thesis}

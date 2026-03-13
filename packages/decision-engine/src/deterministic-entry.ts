@@ -7,25 +7,25 @@
 // Conditions (ALL must pass for entry):
 //   1. ema_fast > ema_slow                     (bull trend)
 //   2. RSI in [35, 62]                          (not overbought, not oversold knife)
-//   3. price_change_5m > 0.05%                 (medium-term upward bias)
+//   3. price_change_5m > -0.05%                (allow shallow pullbacks)
 //   4. volume_ratio > 0.8                       (volume confirmation)
-//   5. spread_bps < 5                           (tight spread)
+//   5. spread_bps <= 6                          (tight spread)
 //   6. book_imbalance > 0.45                    (not ask-dominated)
 // ═══════════════════════════════════════════════════════════════
 
 import { createLogger } from '@cryptobot/core';
-import type { ComputedFeatures } from '@cryptobot/shared-types';
+import type { ComputedFeatures, StrategyConfig } from '@cryptobot/shared-types';
 import { EntryType } from '@cryptobot/shared-types';
 
 const logger = createLogger('deterministic-entry');
 
 // ── Thresholds ────────────────────────────────────────────────
-const RSI_MIN = 35;
-const RSI_MAX = 62;
-const PRICE_CHANGE_5M_MIN_PCT = 0.05;
-const VOLUME_RATIO_MIN = 0.8;
-const SPREAD_BPS_MAX = 5;
-const BOOK_IMBALANCE_MIN = 0.45;
+const RSI_MIN_DEFAULT = 35;
+const RSI_MAX_DEFAULT = 62;
+const PRICE_CHANGE_5M_MIN_PCT = -0.05;
+const VOLUME_RATIO_MIN_DEFAULT = 0.55;
+const SPREAD_BPS_MAX = 6;
+const BOOK_IMBALANCE_MIN_DEFAULT = 0.25;
 
 // ── Default order parameters ──────────────────────────────────
 const TAKE_PROFIT_BPS_DEFAULT = 25;    // 0.25% above entry
@@ -55,6 +55,10 @@ export interface EntryStrategyHints {
   stopLossBps?: number;
   timeoutSec?: number;
   sizeQuote?: number;
+  rsiMin?: number;
+  rsiMax?: number;
+  volumeRatioMin?: number;
+  bookImbalanceMin?: number;
 }
 
 export class DeterministicEntryEngine {
@@ -68,6 +72,10 @@ export class DeterministicEntryEngine {
     hints: EntryStrategyHints = {},
   ): EntryCandidate {
     const failedConditions: string[] = [];
+    const rsiMin = hints.rsiMin ?? RSI_MIN_DEFAULT;
+    const rsiMax = hints.rsiMax ?? RSI_MAX_DEFAULT;
+    const volumeRatioMin = hints.volumeRatioMin ?? VOLUME_RATIO_MIN_DEFAULT;
+    const bookImbalanceMin = hints.bookImbalanceMin ?? BOOK_IMBALANCE_MIN_DEFAULT;
 
     // ── Condition 1: Bull trend (ema_fast must be above ema_slow) ──
     if (features.emaFast <= features.emaSlow) {
@@ -77,9 +85,9 @@ export class DeterministicEntryEngine {
     }
 
     // ── Condition 2: RSI within entry window [35, 62] ──
-    if (features.rsi < RSI_MIN || features.rsi > RSI_MAX) {
+    if (features.rsi < rsiMin || features.rsi > rsiMax) {
       failedConditions.push(
-        `C2 rsi (${features.rsi.toFixed(1)}) outside [${RSI_MIN}, ${RSI_MAX}]`,
+        `C2 rsi (${features.rsi.toFixed(1)}) outside [${rsiMin}, ${rsiMax}]`,
       );
     }
 
@@ -91,23 +99,23 @@ export class DeterministicEntryEngine {
     }
 
     // ── Condition 4: Volume above threshold ──
-    if (features.volumeRatio <= VOLUME_RATIO_MIN) {
+    if (features.volumeRatio <= volumeRatioMin) {
       failedConditions.push(
-        `C4 volume_ratio (${features.volumeRatio.toFixed(2)}) <= ${VOLUME_RATIO_MIN}`,
+        `C4 volume_ratio (${features.volumeRatio.toFixed(2)}) <= ${volumeRatioMin}`,
       );
     }
 
     // ── Condition 5: Spread not too wide ──
-    if (features.spreadBps >= SPREAD_BPS_MAX) {
+    if (features.spreadBps > SPREAD_BPS_MAX) {
       failedConditions.push(
-        `C5 spread_bps (${features.spreadBps.toFixed(2)}) >= ${SPREAD_BPS_MAX}`,
+        `C5 spread_bps (${features.spreadBps.toFixed(2)}) > ${SPREAD_BPS_MAX}`,
       );
     }
 
     // ── Condition 6: Order book not ask-dominated ──
-    if (features.bookImbalance <= BOOK_IMBALANCE_MIN) {
+    if (features.bookImbalance <= bookImbalanceMin) {
       failedConditions.push(
-        `C6 book_imbalance (${features.bookImbalance.toFixed(3)}) <= ${BOOK_IMBALANCE_MIN}`,
+        `C6 book_imbalance (${features.bookImbalance.toFixed(3)}) <= ${bookImbalanceMin}`,
       );
     }
 
@@ -147,10 +155,14 @@ export class DeterministicEntryEngine {
         takeProfitPrice,
         sizeQuote,
         rsi: features.rsi.toFixed(1),
+        rsiMin,
+        rsiMax,
         emaFast: features.emaFast.toFixed(2),
         emaSlow: features.emaSlow.toFixed(2),
         volumeRatio: features.volumeRatio.toFixed(2),
+        volumeRatioMin,
         spreadBps: features.spreadBps.toFixed(2),
+        bookImbalanceMin,
       },
       'Deterministic entry: all 6 conditions met',
     );
@@ -166,6 +178,18 @@ export class DeterministicEntryEngine {
       timeHorizonSec,
       reason: 'All 6 deterministic conditions met',
       failedConditions: [],
+    };
+  }
+
+  static fromStrategyConfig(strategy: StrategyConfig): EntryStrategyHints {
+    return {
+      takeProfitBps: strategy.takeProfitBps,
+      stopLossBps: strategy.stopLossBps,
+      timeoutSec: strategy.timeoutSeconds,
+      rsiMin: Math.min(strategy.rsiOversold, strategy.rsiOverbought - 5),
+      rsiMax: strategy.rsiOverbought,
+      volumeRatioMin: strategy.minVolumeRatio,
+      bookImbalanceMin: strategy.minBookImbalance,
     };
   }
 }

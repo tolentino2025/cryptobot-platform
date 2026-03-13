@@ -17,7 +17,7 @@ import {
   CircuitBreaker,
   retryWithBackoff,
 } from '@cryptobot/core';
-import type { PrismaClient, Prisma } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import {
   DEFAULT_HOLD_ASSESSMENT,
   type AIAssessment,
@@ -28,6 +28,10 @@ import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { validateAIAssessment } from './schema.js';
 
 const logger = createLogger('decision-engine');
+
+function toInputJson(value: AIAssessment | Record<string, unknown>): Prisma.InputJsonObject {
+  return value as unknown as Prisma.InputJsonObject;
+}
 
 export interface DecisionEngineConfig {
   apiKey: string;
@@ -225,8 +229,8 @@ export class ClaudeDecisionEngine implements IDecisionEngine {
           requestId,
           symbol: context.symbol,
           // Store AIAssessment JSON — compatible with the existing Json column
-          decision: assessment as unknown as Prisma.InputJsonValue,
-          inputSummary: inputSummary as unknown as Prisma.InputJsonValue,
+          decision: toInputJson(assessment),
+          inputSummary: toInputJson(inputSummary),
           rawResponse: rawResponse.slice(0, 10000),
           isValid: !isFallback,
           isFallback,

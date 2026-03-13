@@ -32,6 +32,8 @@ export interface ServerDependencies {
   getHealth: () => Promise<SystemHealthReport>;
   /** Close all open positions at market price immediately */
   emergencyLiquidateAll: (reason: string) => Promise<void>;
+  /** Gracefully stop the current API process */
+  requestShutdown: (reason: string) => void;
 }
 
 export async function createServer(deps: ServerDependencies) {
@@ -106,6 +108,7 @@ export async function createServer(deps: ServerDependencies) {
     await deps.setSystemState(SystemState.KILLED, body.reason);
     await deps.audit.recordAdminAction(reqId, AdminActionType.KILL, { reason: body.reason }, 'api');
     await deps.notifications.critical('KILL SWITCH', `Kill switch activated: ${body.reason}`);
+    setTimeout(() => deps.requestShutdown(`Kill switch activated: ${body.reason}`), 100);
     return { success: true, state: SystemState.KILLED, message: 'System killed. All positions liquidated. Restart required.' };
   });
 
@@ -360,7 +363,9 @@ export async function createServer(deps: ServerDependencies) {
     const dailyLossRemaining = riskLimits
       ? riskLimits.maxDailyLoss + Math.min(0, portfolio.dailyPnl)
       : null;
-    const tradingHaltReason = latestStateChange?.reason ?? null;
+    const tradingHaltReason = currentState === SystemState.RUNNING
+      ? null
+      : latestStateChange?.reason ?? null;
 
     return {
       system: {
@@ -379,10 +384,27 @@ export async function createServer(deps: ServerDependencies) {
         : null,
       recentDecisions: recentDecisions.map((d) => ({
         id: d.id,
-        action: (d.decision as any)?.action ?? 'HOLD',
+        action: (d.decision as any)?.should_exit ? 'EXIT' : 'HOLD',
         symbol: d.symbol,
+        regime: (d.decision as any)?.regime ?? null,
         confidence: (d.decision as any)?.confidence ?? 0,
         thesis: (d.decision as any)?.thesis ?? '',
+        entryVeto: (d.decision as any)?.entry_veto ?? false,
+        entryVetoReason: (d.decision as any)?.entry_veto_reason ?? null,
+        shouldExit: (d.decision as any)?.should_exit ?? false,
+        exitReason: (d.decision as any)?.exit_reason ?? null,
+        isFallback: d.isFallback,
+        fallbackReason: d.fallbackReason,
+        inputSummary: d.inputSummary,
+        holdReason: (d.decision as any)?.hold_reason ?? ((d.decision as any)?.should_exit
+          ? `AI exit signal: ${(d.decision as any)?.exit_reason ?? 'unknown'}`
+          : (d.decision as any)?.entry_veto
+            ? `AI veto: ${(d.decision as any)?.entry_veto_reason ?? 'No reason provided'}`
+            : 'No entry conditions met / no exit signal'),
+        pipelineStageStoppedAt: (d.decision as any)?.pipeline_stage_stopped_at ?? null,
+        failedEntryConditions: Array.isArray((d.decision as any)?.failed_entry_conditions)
+          ? (d.decision as any).failed_entry_conditions as string[]
+          : [],
         verdict: d.riskReview?.verdict ?? 'N/A',
         denialReason: d.riskReview?.denialReasons?.join(', ') ?? null,
         latencyMs: d.latencyMs,

@@ -33,6 +33,29 @@ interface SimState {
   volumeBase: number;           // baseline volume level
 }
 
+interface RestTicker24h {
+  bidPrice: string;
+  askPrice: string;
+  lastPrice: string;
+  volume?: string;
+  quoteVolume?: string;
+  highPrice?: string;
+  lowPrice?: string;
+}
+
+interface RestBookDepth {
+  bids: [string, string][];
+  asks: [string, string][];
+}
+
+interface RestTrade {
+  id: number;
+  price: string;
+  qty: string;
+  isBuyerMaker: boolean;
+  time: number;
+}
+
 /** Threshold (ms) after which the watchdog restarts a stale data stream */
 const WATCHDOG_RESTART_MS = 5_000;
 
@@ -73,14 +96,13 @@ export class MarketDataService {
         maxStalenessMs: 0,
       });
 
-      // Always start simulated data for candles/book baseline
-      this.startSimulatedData(symbol);
-
       if (!simMode && this.restBaseUrl) {
-        // DEMO/LIVE: overlay real prices from exchange REST every 2 s
-        this.startRestPriceFeed(symbol);
-        logger.info({ symbol, restBaseUrl: this.restBaseUrl }, 'REST price feed started (DEMO/LIVE mode)');
+        // DEMO/LIVE: build the full snapshot from real REST endpoints
+        this.startRestSnapshotFeed(symbol);
+        logger.info({ symbol, restBaseUrl: this.restBaseUrl }, 'REST snapshot feed started (DEMO/LIVE mode)');
       } else {
+        // SIM: fully synthetic market stream
+        this.startSimulatedData(symbol);
         logger.info({ symbol }, 'Simulated market data started (SIM mode)');
       }
 
@@ -149,46 +171,113 @@ export class MarketDataService {
     return true;
   }
 
-  // ── REST price feed (DEMO / LIVE mode) ───────────────────────
+  // ── REST snapshot feed (DEMO / LIVE mode) ────────────────────
 
   /**
-   * Poll the exchange REST API every 2 s for the current ticker price.
-   * Updates the ticker in the existing snapshot (keeps simulated candles/book).
+   * Poll the exchange REST API every 2 s and rebuild the full market snapshot.
+   * This avoids the DEMO/LIVE hybrid mode where ticker was real but candles/book/trades were simulated.
    */
-  private startRestPriceFeed(symbol: string): void {
+  private startRestSnapshotFeed(symbol: string): void {
     const existing = this.restPollIntervals.get(symbol);
     if (existing) clearInterval(existing);
 
     const poll = async () => {
       if (!this.running) return;
       try {
-        const res = await fetch(
-          `${this.restBaseUrl}/api/v3/ticker/price?symbol=${symbol}`,
-        );
-        if (!res.ok) return;
-        const data = await res.json() as { price: string };
-        const price = parseFloat(data.price);
-        if (isNaN(price) || price <= 0) return;
+        const [ticker24h, bookDepth, tradesRaw, candles1mRaw, candles5mRaw] = await Promise.all([
+          fetch(`${this.restBaseUrl}/api/v3/ticker/24hr?symbol=${symbol}`).then((r) => r.ok ? r.json() as Promise<RestTicker24h> : null),
+          fetch(`${this.restBaseUrl}/api/v3/depth?symbol=${symbol}&limit=10`).then((r) => r.ok ? r.json() as Promise<RestBookDepth> : null),
+          fetch(`${this.restBaseUrl}/api/v3/trades?symbol=${symbol}&limit=20`).then((r) => r.ok ? r.json() as Promise<RestTrade[]> : null),
+          fetch(`${this.restBaseUrl}/api/v3/klines?symbol=${symbol}&interval=1m&limit=60`).then((r) => r.ok ? r.json() as Promise<unknown[]> : null),
+          fetch(`${this.restBaseUrl}/api/v3/klines?symbol=${symbol}&interval=5m&limit=12`).then((r) => r.ok ? r.json() as Promise<unknown[]> : null),
+        ]);
 
-        // Patch the ticker price in the existing snapshot
-        const snapshot = this.snapshots.get(symbol);
-        if (snapshot) {
-          const halfSpread = price * 0.0001; // 1 bps spread approx
-          snapshot.ticker = {
-            ...snapshot.ticker,
-            bid:   price - halfSpread,
-            ask:   price + halfSpread,
-            last:  price,
-            timestamp: Date.now(),
-          };
-          snapshot.timestamp = Date.now();
-          snapshot.dataAgeMs  = 0;
-          snapshot.isFresh    = true;
-          const h = this.health.get(symbol);
-          if (h) { h.wsConnected = true; h.lastTickerUpdate = Date.now(); }
+        if (!ticker24h || !bookDepth || !tradesRaw || !candles1mRaw || !candles5mRaw) {
+          return;
         }
+
+        const now = Date.now();
+        const bid = parseFloat(ticker24h.bidPrice);
+        const ask = parseFloat(ticker24h.askPrice);
+        const last = parseFloat(ticker24h.lastPrice);
+        if ([bid, ask, last].some((value) => !isFinite(value) || value <= 0)) return;
+
+        const ticker: Ticker = {
+          symbol,
+          bid,
+          ask,
+          last,
+          volume24h: parseFloat(ticker24h.volume ?? '0'),
+          quoteVolume24h: parseFloat(ticker24h.quoteVolume ?? '0'),
+          high24h: parseFloat(ticker24h.highPrice ?? String(last)),
+          low24h: parseFloat(ticker24h.lowPrice ?? String(last)),
+          timestamp: now,
+        };
+
+        const candles1m: Candle[] = Array.isArray(candles1mRaw)
+          ? candles1mRaw.map((c) => this.mapRestKline(c)).filter(Boolean) as Candle[]
+          : [];
+        const candles5m: Candle[] = Array.isArray(candles5mRaw)
+          ? candles5mRaw.map((c) => this.mapRestKline(c)).filter(Boolean) as Candle[]
+          : [];
+
+        const book: OrderBookSnapshot = {
+          symbol,
+          bids: Array.isArray(bookDepth.bids)
+            ? bookDepth.bids.map((level: [string, string]) => ({
+              price: parseFloat(level[0]),
+              quantity: parseFloat(level[1]),
+            })).filter((level) => isFinite(level.price) && isFinite(level.quantity))
+            : [],
+          asks: Array.isArray(bookDepth.asks)
+            ? bookDepth.asks.map((level: [string, string]) => ({
+              price: parseFloat(level[0]),
+              quantity: parseFloat(level[1]),
+            })).filter((level) => isFinite(level.price) && isFinite(level.quantity))
+            : [],
+          timestamp: now,
+        };
+
+        const recentTrades: RecentTrade[] = Array.isArray(tradesRaw)
+          ? tradesRaw.map((trade) => ({
+            id: String(trade.id),
+            symbol,
+            price: parseFloat(trade.price),
+            quantity: parseFloat(trade.qty),
+            isBuyerMaker: trade.isBuyerMaker,
+            timestamp: trade.time,
+          })).filter((trade) => isFinite(trade.price) && isFinite(trade.quantity))
+          : [];
+
+        const snapshot: MarketSnapshot = {
+          symbol,
+          ticker,
+          candles1m,
+          candles5m,
+          book,
+          recentTrades,
+          timestamp: now,
+          dataAgeMs: 0,
+          isFresh: true,
+        };
+
+        this.snapshots.set(symbol, snapshot);
+
+        const h = this.health.get(symbol);
+        if (h) {
+          h.wsConnected = true;
+          h.lastTickerUpdate = now;
+          h.lastBookUpdate = now;
+          h.lastTradeUpdate = now;
+          h.lastCandleUpdate = now;
+          h.dataGapDetected = false;
+          h.maxStalenessMs = 0;
+        }
+
+        setWithTTL(`market:${symbol}`, JSON.stringify({ price: ticker.last, bid: ticker.bid, ask: ticker.ask }), SNAPSHOT_TTL).catch(() => {});
+        eventBus.emit('market:snapshot', { symbol, timestamp: now });
       } catch (err) {
-        logger.warn({ symbol, error: err }, 'REST price feed poll failed');
+        logger.warn({ symbol, error: err }, 'REST snapshot feed poll failed');
       }
     };
 
@@ -217,22 +306,52 @@ export class MarketDataService {
         logger.warn({ symbol, ageMs: age }, 'Market data watchdog: stale — restarting stream');
         eventBus.emit('market:gap', { symbol, gapMs: age });
 
-        // Restart sim data
-        const si = this.simIntervals.get(symbol);
-        if (si) { clearInterval(si); this.simIntervals.delete(symbol); }
-        this.startSimulatedData(symbol);
-
-        // Restart REST feed if applicable
         if (!simMode && this.restBaseUrl) {
           const ri = this.restPollIntervals.get(symbol);
           if (ri) { clearInterval(ri); this.restPollIntervals.delete(symbol); }
-          this.startRestPriceFeed(symbol);
+          this.startRestSnapshotFeed(symbol);
+        } else {
+          const si = this.simIntervals.get(symbol);
+          if (si) { clearInterval(si); this.simIntervals.delete(symbol); }
+          this.startSimulatedData(symbol);
         }
       }
     };
 
     const interval = setInterval(check, WATCHDOG_RESTART_MS);
     this.watchdogIntervals.set(symbol, interval);
+  }
+
+  private mapRestKline(raw: unknown): Candle | null {
+    if (!Array.isArray(raw) || raw.length < 9) return null;
+
+    const [
+      openTime,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      closeTime,
+      quoteVolume,
+      trades,
+    ] = raw;
+
+    const candle: Candle = {
+      openTime: Number(openTime),
+      open: Number(open),
+      high: Number(high),
+      low: Number(low),
+      close: Number(close),
+      volume: Number(volume),
+      closeTime: Number(closeTime),
+      quoteVolume: Number(quoteVolume),
+      trades: Number(trades),
+    };
+
+    return Object.values(candle).every((value) => typeof value === 'number' && isFinite(value))
+      ? candle
+      : null;
   }
 
   // ── Simulated data with realistic market regimes ─────────────

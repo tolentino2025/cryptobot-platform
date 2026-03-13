@@ -5,22 +5,22 @@
    ═══════════════════════════════════════════════════════ */
 
 :root {
-  --bg:            #070D16;
-  --surface:       #0C1824;
-  --elevated:      #112030;
-  --border:        #1C2E40;
-  --border-active: #26405A;
+  --bg:            #061018;
+  --surface:       rgba(7, 18, 28, 0.82);
+  --elevated:      rgba(12, 28, 41, 0.94);
+  --border:        rgba(111, 145, 171, 0.20);
+  --border-active: rgba(143, 187, 222, 0.48);
 
   --profit:  #22C55E;
   --loss:    #EF4444;
   --warning: #F59E0B;
   --info:    #3B82F6;
-  --purple:  #8B5CF6;
+  --purple:  #D97706;
   --teal:    #14B8A6;
 
-  --text:    #C4D6E8;
-  --text-sec:#5C7A90;
-  --text-dim:#283C50;
+  --text:    #E7F1FA;
+  --text-sec:#A1B8CA;
+  --text-dim:#5F788C;
 
   color-scheme: dark;
 }
@@ -36,9 +36,29 @@ html {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Manrope', 'Space Grotesk', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(20, 184, 166, 0.18), transparent 22%),
+    radial-gradient(circle at 88% 0%, rgba(59, 130, 246, 0.18), transparent 24%),
+    radial-gradient(circle at 50% 100%, rgba(217, 119, 6, 0.10), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
+    linear-gradient(180deg, #061018 0%, #08131d 48%, #040a10 100%);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 88px 88px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.45), transparent 92%);
+  opacity: 0.22;
 }
 
 /* Thin, clean scrollbars */
@@ -54,5 +74,26 @@ body {
 }
 .pulse { animation: pulse-glow 2s ease-in-out infinite; }
 
+@keyframes live-enter {
+  0% {
+    transform: translateY(4px);
+    opacity: 0.35;
+    box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+  }
+  40% {
+    opacity: 1;
+    box-shadow: 0 0 28px rgba(59, 130, 246, 0.18);
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+    box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+.live-enter {
+  animation: live-enter 900ms ease-out;
+}
+
 /* Mono font utility */
-.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.mono { font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace; }

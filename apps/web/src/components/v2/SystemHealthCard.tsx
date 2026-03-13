@@ -217,6 +217,28 @@ export function SystemHealthCard({ health, system, incidents }: Props) {
       />
 
       <div className="p-5 space-y-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: 'Operating State', value: system.state, color: system.state === 'RUNNING' ? DS.profit : DS.warning },
+            { label: 'Active Incidents', value: String(activeCount), color: activeCount === 0 ? DS.profit : criticalCount > 0 ? DS.loss : DS.warning },
+            { label: 'Critical Alerts', value: String(criticalCount), color: criticalCount === 0 ? DS.profit : DS.loss },
+            { label: 'System Posture', value: overallLabel, color: overallColor },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-xl p-3"
+              style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
+            >
+              <div className="text-[9px] uppercase tracking-[0.16em]" style={{ color: DS.textMuted }}>
+                {item.label}
+              </div>
+              <div className="mt-1 text-lg font-bold" style={{ color: item.color, fontFamily: DS.mono }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* System info row */}
         <div
           className="grid grid-cols-4 gap-3 rounded-lg p-3"

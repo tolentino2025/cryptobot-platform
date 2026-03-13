@@ -32,6 +32,31 @@ async function main() {
   }
 
   try {
+    let server: Awaited<ReturnType<typeof createServer>> | null = null;
+    let shuttingDown = false;
+
+    const shutdown = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info({ signal }, 'Shutting down gracefully...');
+      await orchestrator.stop().catch((error) => {
+        logger.error({ error }, 'Failed to stop orchestrator during shutdown');
+      });
+      if (server) {
+        await server.close().catch((error) => {
+          logger.error({ error }, 'Failed to close HTTP server during shutdown');
+        });
+      }
+      await prisma.$disconnect().catch((error) => {
+        logger.error({ error }, 'Failed to disconnect Prisma during shutdown');
+      });
+      await closeRedis().catch((error) => {
+        logger.error({ error }, 'Failed to close Redis during shutdown');
+      });
+      logger.info('Shutdown complete');
+      process.exit(0);
+    };
+
     // 2. Test database connection
     await prisma.$connect();
     logger.info('Database connected');
@@ -78,7 +103,7 @@ async function main() {
     const services = orchestrator.getServices();
 
     // 5. Create HTTP server
-    const server = await createServer({
+    server = await createServer({
       db: prisma,
       audit: services.audit,
       portfolio: services.portfolio,
@@ -89,6 +114,9 @@ async function main() {
       setTradingMode: (mode, code) => orchestrator.setTradingMode(mode, code),
       getHealth: () => orchestrator.getHealth(),
       emergencyLiquidateAll: (reason) => services.liquidateAllPositions(reason),
+      requestShutdown: (reason) => {
+        void shutdown(reason);
+      },
     });
 
     // 6. Start HTTP server
@@ -97,17 +125,6 @@ async function main() {
 
     // 7. Start the main orchestrator (market data + decision loop)
     await orchestrator.start();
-
-    // ── Graceful Shutdown ──
-    const shutdown = async (signal: string) => {
-      logger.info({ signal }, 'Shutting down gracefully...');
-      await orchestrator.stop();
-      await server.close();
-      await prisma.$disconnect();
-      await closeRedis();
-      logger.info('Shutdown complete');
-      process.exit(0);
-    };
 
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));

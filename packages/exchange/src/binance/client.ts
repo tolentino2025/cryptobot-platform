@@ -186,21 +186,38 @@ export class BinanceClient {
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    return this.rawRequest<T>('GET', path, this.buildSignedQs(params), false);
+    return this.signedRequest<T>('GET', path, params);
   }
 
   private async signedPost<T>(
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    return this.rawRequest<T>('POST', path, this.buildSignedQs(params), false);
+    return this.signedRequest<T>('POST', path, params);
   }
 
   private async signedDelete<T>(
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    return this.rawRequest<T>('DELETE', path, this.buildSignedQs(params), false);
+    return this.signedRequest<T>('DELETE', path, params);
+  }
+
+  private async signedRequest<T>(
+    method: HttpMethod,
+    path: string,
+    params: Record<string, string | number | boolean>,
+  ): Promise<T> {
+    try {
+      return await this.rawRequest<T>(method, path, this.buildSignedQs(params), false);
+    } catch (error) {
+      if (error instanceof BinanceApiException && error.code === -1021) {
+        logger.warn({ path, method }, 'Timestamp out of sync — re-syncing exchange time and retrying once');
+        await this.syncTime();
+        return this.rawRequest<T>(method, path, this.buildSignedQs(params), false);
+      }
+      throw error;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

@@ -45,6 +45,10 @@ export class FeatureEngine {
         takeProfitBps: strategy.takeProfitBps,
         stopLossBps: strategy.stopLossBps,
         timeoutSec: strategy.timeoutSeconds,
+        rsiOversold: strategy.rsiOversold,
+        rsiOverbought: strategy.rsiOverbought,
+        minVolumeRatio: strategy.minVolumeRatio,
+        minBookImbalance: strategy.minBookImbalance,
       },
     };
   }

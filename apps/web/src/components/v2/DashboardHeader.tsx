@@ -13,6 +13,8 @@ interface Props {
   };
   lastUpdated: Date | null;
   onAction:    (action: string) => void;
+  role:        'viewer' | 'admin' | null;
+  onLogout:    () => void;
 }
 
 const STATE_COLOR: Record<string, string> = {
@@ -22,92 +24,85 @@ const MODE_COLOR: Record<string, string> = {
   LIVE: DS.loss, DEMO: DS.warning, SIM: DS.info, SIMULATION: DS.info,
 };
 
-export function DashboardHeader({ system, lastUpdated, onAction }: Props) {
+export function DashboardHeader({ system, lastUpdated, onAction, role, onLogout }: Props) {
   const stateColor = STATE_COLOR[system.state] ?? DS.textSec;
   const modeColor  = MODE_COLOR[system.mode]  ?? DS.textSec;
 
   return (
     <header
       className="flex flex-col flex-shrink-0"
-      style={{ background: DS.surface, borderBottom: `1px solid ${DS.border}` }}
+      style={{
+        background: `linear-gradient(180deg, rgba(6,16,24,0.96), rgba(8,20,29,0.90))`,
+        borderBottom: `1px solid ${DS.border}`,
+        backdropFilter: 'blur(18px)',
+      }}
     >
-      {/* Main header bar */}
-      <div className="flex items-center gap-4 px-5 h-14">
-        {/* Logo */}
-        <div className="flex items-center gap-2.5 flex-shrink-0">
+      <div className="px-5 py-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex items-start gap-4">
           <div
-            className="w-2 h-2 rounded-full"
-            style={{ background: DS.info, boxShadow: `0 0 6px ${DS.info}` }}
-          />
-          <span
-            className="text-sm font-bold tracking-widest uppercase"
-            style={{ color: DS.text, fontFamily: DS.mono, letterSpacing: '0.15em' }}
+            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+            style={{
+              background: `linear-gradient(135deg, ${DS.info}24, ${DS.teal}20)`,
+              border: `1px solid ${DS.borderActive}`,
+              boxShadow: `0 10px 24px rgba(0,0,0,0.2)`,
+            }}
           >
-            CryptoBot
-          </span>
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{ color: DS.textSec, background: DS.elevated, fontFamily: DS.mono }}
-          >
-            v{system.version}
-          </span>
-        </div>
-
-        <div className="h-5 w-px flex-shrink-0" style={{ background: DS.border }} />
-
-        {/* State + mode */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <div className="flex items-center gap-1.5">
-            <StatusDot
-              color={stateColor}
-              pulse={system.state === 'RUNNING'}
-            />
-            <span
-              className="text-xs font-semibold uppercase tracking-wider"
-              style={{ color: stateColor, fontFamily: DS.mono }}
-            >
-              {system.state}
-            </span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ background: DS.info, boxShadow: `0 0 12px ${DS.info}` }} />
           </div>
-          <Badge label={system.mode} color={modeColor} size="xs" />
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className="text-sm font-black tracking-[0.24em] uppercase"
+                style={{ color: DS.text, fontFamily: DS.mono }}
+              >
+                CryptoBot
+              </span>
+              <span
+                className="text-[10px] px-2 py-1 rounded-full"
+                style={{ color: DS.textSec, background: DS.elevated, fontFamily: DS.mono, border: `1px solid ${DS.border}` }}
+              >
+                v{system.version}
+              </span>
+              <Badge label={system.mode} color={modeColor} size="xs" />
+              <Badge label={system.state} color={stateColor} size="xs" />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <div className="flex items-center gap-2">
+                <StatusDot color={stateColor} pulse={system.state === 'RUNNING'} />
+                <span className="text-sm font-semibold" style={{ color: DS.text }}>
+                  {system.state === 'RUNNING' ? 'Bot active and cycling' : `Bot ${system.state.toLowerCase()}`}
+                </span>
+              </div>
+              <span className="text-xs" style={{ color: DS.textSec, fontFamily: DS.mono }}>
+                uptime {fmt.duration(system.uptime)}
+              </span>
+              <span className="text-xs" style={{ color: DS.textMuted, fontFamily: DS.mono }}>
+                {lastUpdated ? `last sync ${lastUpdated.toLocaleTimeString()}` : 'syncing'}
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="h-5 w-px flex-shrink-0" style={{ background: DS.border }} />
-
-        {/* Uptime */}
-        <div className="hidden md:flex items-center gap-1.5 flex-shrink-0">
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: DS.textMuted }}>
-            Uptime
-          </span>
-          <span
-            className="text-[11px] font-medium"
-            style={{ color: DS.textSec, fontFamily: DS.mono }}
-          >
-            {fmt.duration(system.uptime)}
-          </span>
-        </div>
-
-        {/* Spacer */}
-        <div className="flex-1" />
-
-        {/* Last updated */}
-        <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: DS.profit, opacity: 0.7 }}
+        <div className="flex items-center gap-2 flex-wrap xl:justify-end">
+          <Badge
+            label={role === 'admin' ? 'admin' : 'read-only'}
+            color={role === 'admin' ? DS.loss : DS.info}
+            size="xs"
           />
-          <span className="text-[10px]" style={{ color: DS.textMuted, fontFamily: DS.mono }}>
-            {lastUpdated ? `updated ${lastUpdated.toLocaleTimeString()}` : 'connecting…'}
-          </span>
-        </div>
-
-        <div className="h-5 w-px flex-shrink-0" style={{ background: DS.border }} />
-
-        {/* Control buttons */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <CtrlBtn label="Pause"  onClick={() => onAction('pause')}  color={DS.warning} />
-          <CtrlBtn label="Resume" onClick={() => onAction('resume')} color={DS.profit}  />
-          <CtrlBtn label="Kill"   onClick={() => onAction('kill')}   color={DS.loss}    />
+          {role === 'admin' ? (
+            <>
+              <CtrlBtn label="Pause"  onClick={() => onAction('pause')}  color={DS.warning} />
+              <CtrlBtn label="Resume" onClick={() => onAction('resume')} color={DS.profit}  />
+              <CtrlBtn label="Kill"   onClick={() => onAction('kill')}   color={DS.loss}    />
+            </>
+          ) : (
+            <span className="text-[10px]" style={{ color: DS.textMuted, fontFamily: DS.mono }}>
+              Controls locked
+            </span>
+          )}
+          <CtrlBtn label="Logout" onClick={onLogout} color={DS.textSec} />
         </div>
       </div>
 

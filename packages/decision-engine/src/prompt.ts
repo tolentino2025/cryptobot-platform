@@ -22,21 +22,22 @@ YOUR ROLE (read carefully — this is non-negotiable):
 - You may VETO an entry if the regime does not support it (entry_veto: true).
 - You may signal EXIT if a held position should close (should_exit: true).
 - When uncertain, do NOT veto and do NOT exit — let the deterministic rules decide.
+- Prefer the numeric thresholds provided under strategy_hints when they are present.
 
 REGIME CLASSIFICATION (choose exactly one):
 - BULL_TREND:    ema_fast > ema_slow by >0.1%, RSI trending up, sustained price momentum
 - BEAR_TREND:    ema_fast < ema_slow by >0.1%, RSI falling, negative price momentum
 - RANGE:         ema_diff_pct between -0.1% and +0.1%, RSI between 40-60, no clear direction
-- VOLATILE:      price_change_5m absolute > 0.3% OR volatility_1m > 0.002, erratic movement
-- LOW_LIQUIDITY: volume_ratio < 0.5 OR spread_bps > 5, thin market
+- VOLATILE:      price_change_5m absolute > 0.5% OR volatility_1m > 0.003, erratic movement
+- LOW_LIQUIDITY: volume_ratio < 0.35 OR spread_bps > 5, thin market
 
 ENTRY VETO RULES — set entry_veto: true ONLY if:
 - Regime is BEAR_TREND, VOLATILE, or LOW_LIQUIDITY
-- RSI > 68 (overbought — dangerous entry)
-- RSI < 30 (knife catching)
-- price_change_5m < -0.15% (momentum collapsing)
-- book_imbalance < 0.35 (heavy ask pressure)
-- Regime is RANGE but RSI > 60 (range top)
+- RSI > 70 (overbought — dangerous entry)
+- RSI < strategy_hints.rsi_oversold (knife catching)
+- price_change_5m < -0.25% (momentum collapsing)
+- book_imbalance < 0.2 (heavy ask pressure)
+- Regime is RANGE but RSI > 65 (range top)
 Default: entry_veto: false (let deterministic engine decide)
 
 EXIT SIGNAL RULES — set should_exit: true if a position is LONG and any of:
@@ -73,6 +74,8 @@ Respond ONLY with valid JSON. No markdown. No text before or after.
 }
 
 Important rules:
+- Treat strategy_hints as the source of truth for RSI, volume, and book thresholds.
+- Do not invent stricter RSI/range-top limits than strategy_hints.
 - If should_exit is false, exit_reason MUST be null and exit_thesis MUST be empty string.
 - If should_exit is true but there is no position (has_position: false), set should_exit: false.
 - thesis must always mention: regime, ema_diff_pct, RSI value.`;
@@ -82,14 +85,17 @@ export function buildUserMessage(ctx: DecisionContext): string {
   const f = ctx.features;
   const emaDiff = f.emaFast - f.emaSlow;
   const emaDiffPct = f.emaSlow > 0 ? (emaDiff / f.emaSlow) * 100 : 0;
+  const lowLiquidityVolumeThreshold = ctx.strategyHints.minVolumeRatio;
+  const bullTrendThresholdPct = 0.05;
+  const volatileMoveThresholdPct = 0.5;
 
   // Pre-classify regime hint for Claude (it should agree or override with reasoning)
   let regimeHint: string;
-  if (f.volumeRatio < 0.5 || f.spreadBps > 5) {
+  if (f.volumeRatio < lowLiquidityVolumeThreshold || f.spreadBps > 5) {
     regimeHint = 'LOW_LIQUIDITY';
-  } else if (Math.abs(f.priceChangePercent5m) > 0.3 || f.realizedVolatility > 0.002) {
+  } else if (Math.abs(f.priceChangePercent5m) > volatileMoveThresholdPct || f.realizedVolatility > 0.003) {
     regimeHint = 'VOLATILE';
-  } else if (Math.abs(emaDiffPct) < 0.1) {
+  } else if (Math.abs(emaDiffPct) < bullTrendThresholdPct) {
     regimeHint = 'RANGE';
   } else if (emaDiff > 0) {
     regimeHint = 'BULL_TREND';
@@ -140,6 +146,10 @@ export function buildUserMessage(ctx: DecisionContext): string {
       take_profit_bps: ctx.strategyHints.takeProfitBps,
       stop_loss_bps: ctx.strategyHints.stopLossBps,
       timeout_sec: ctx.strategyHints.timeoutSec,
+      rsi_oversold: ctx.strategyHints.rsiOversold,
+      rsi_overbought: ctx.strategyHints.rsiOverbought,
+      min_volume_ratio: ctx.strategyHints.minVolumeRatio,
+      min_book_imbalance: ctx.strategyHints.minBookImbalance,
     },
   });
 }

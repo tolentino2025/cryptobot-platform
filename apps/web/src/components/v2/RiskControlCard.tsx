@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, CardHeader, ProgressMetric, Badge, DS } from './ui';
+import { Card, CardHeader, ProgressMetric, Badge, DS, DataPill } from './ui';
 import { fmt } from '@/lib/fmt';
 
 interface RiskLimits {
@@ -95,6 +95,29 @@ export function RiskControlCard({ portfolio, riskLimits }: Props) {
       />
 
       <div className="p-5 space-y-1">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+          <DataPill
+            label="Risk posture"
+            value={level}
+            tone={levelCfg.color}
+          />
+          <DataPill
+            label="Loss budget"
+            value={maxDailyLoss > 0 ? fmt.usd(dailyLossRemaining) : 'Open'}
+            tone={dailyLossPct != null && dailyLossPct >= 60 ? DS.warning : DS.profit}
+          />
+          <DataPill
+            label="Trades used"
+            value={`${trades}/${maxTrades}`}
+            tone={tradesPct != null && tradesPct >= 60 ? DS.warning : DS.info}
+          />
+          <DataPill
+            label="Exposure"
+            value={fmt.usd(exposure)}
+            tone={exposurePct != null && exposurePct >= 60 ? DS.warning : DS.textSec}
+          />
+        </div>
+
         {/* Alerts */}
         {alerts.length > 0 && (
           <div
@@ -107,6 +130,23 @@ export function RiskControlCard({ portfolio, riskLimits }: Props) {
                 <span>{a}</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {alerts.length === 0 && (
+          <div
+            className="rounded-lg px-3.5 py-3 mb-3 flex items-center justify-between gap-3"
+            style={{ background: DS.elevated, border: `1px solid ${DS.border}` }}
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: DS.textMuted }}>
+                Risk monitor
+              </div>
+              <div className="text-sm font-semibold mt-1" style={{ color: DS.text }}>
+                No active risk pressure detected
+              </div>
+            </div>
+            <Badge label="CLEAR" color={DS.profit} size="xs" />
           </div>
         )}
 

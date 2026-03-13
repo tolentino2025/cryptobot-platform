@@ -63,6 +63,10 @@ export interface DecisionContext {
     takeProfitBps: number;
     stopLossBps: number;
     timeoutSec: number;
+    rsiOversold: number;
+    rsiOverbought: number;
+    minVolumeRatio: number;
+    minBookImbalance: number;
   };
 }
 

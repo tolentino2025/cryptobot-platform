@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CryptoBot Command Center Visual Base</title>
+  <style>
+    :root {
+      --bg: #061018;
+      --surface: rgba(7, 18, 28, 0.84);
+      --panel: rgba(15, 34, 49, 0.96);
+      --panel-2: rgba(11, 24, 36, 0.98);
+      --elevated: rgba(12, 28, 41, 0.94);
+      --border: rgba(111, 145, 171, 0.20);
+      --text: #e7f1fa;
+      --text-sec: #a1b8ca;
+      --text-muted: #5f788c;
+      --profit: #22c55e;
+      --loss: #ef4444;
+      --warning: #f59e0b;
+      --info: #3b82f6;
+      --teal: #14b8a6;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(20, 184, 166, 0.18), transparent 22%),
+        radial-gradient(circle at 88% 0%, rgba(59, 130, 246, 0.18), transparent 24%),
+        radial-gradient(circle at 50% 100%, rgba(217, 119, 6, 0.10), transparent 28%),
+        linear-gradient(180deg, rgba(255,255,255,0.03), transparent 24%),
+        linear-gradient(180deg, #061018 0%, #08131d 48%, #040a10 100%);
+      font-family: Manrope, "Space Grotesk", system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 88px 88px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.45), transparent 92%);
+      opacity: 0.22;
+    }
+
+    .mono { font-family: "IBM Plex Mono", "JetBrains Mono", monospace; }
+    .wrap { width: min(1520px, calc(100% - 32px)); margin: 0 auto; position: relative; z-index: 1; }
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(16px);
+      background: linear-gradient(180deg, rgba(6,16,24,0.92), rgba(6,16,24,0.72));
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-inner {
+      width: min(1520px, calc(100% - 32px));
+      margin: 0 auto;
+      min-height: 84px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-mark {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, rgba(20,184,166,0.18), rgba(59,130,246,0.16));
+      border: 1px solid rgba(59,130,246,0.24);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      color: var(--teal);
+      font-weight: 700;
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .22em;
+      color: var(--text-muted);
+    }
+
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 22px; line-height: 1.1; }
+    h2 { font-size: 22px; line-height: 1.1; }
+    h3 { font-size: 15px; line-height: 1.2; }
+
+    .subline {
+      margin-top: 4px;
+      color: var(--text-sec);
+      font-size: 13px;
+    }
+
+    .badge-row, .pill-row, .flow-row, .grid, .mini-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .badge-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 8px;
+      border: 1px solid currentColor;
+      background: rgba(255,255,255,0.05);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      font-weight: 700;
+    }
+
+    .badge.profit { color: var(--profit); background: rgba(34,197,94,0.10); }
+    .badge.warning { color: var(--warning); background: rgba(245,158,11,0.10); }
+    .badge.info { color: var(--info); background: rgba(59,130,246,0.10); }
+    .badge.loss { color: var(--loss); background: rgba(239,68,68,0.10); }
+    .badge.muted { color: var(--text-sec); background: rgba(255,255,255,0.05); border-color: rgba(161,184,202,0.28); }
+
+    .card {
+      background: linear-gradient(180deg, var(--surface) 0%, var(--panel-2) 100%);
+      border: 1px solid var(--border);
+      border-top: 2px solid rgba(59,130,246,0.5);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 20px 70px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.03);
+      backdrop-filter: blur(18px);
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 18px 20px 16px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+    }
+
+    .card-body { padding: 18px 20px 20px; }
+    .section { padding: 20px 0; }
+
+    .hero-card {
+      background: linear-gradient(135deg, var(--panel) 0%, rgba(6, 16, 24, .96) 52%, rgba(11, 34, 46, .96) 100%);
+      border-top-color: rgba(34,197,94,0.7);
+    }
+
+    .hero-top {
+      display: grid;
+      grid-template-columns: 1.3fr .9fr;
+      gap: 18px;
+      align-items: end;
+    }
+
+    .pill-row.top-pills { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .pill-row.command-pills { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+    .flow-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .pill {
+      border-radius: 14px;
+      padding: 12px 14px;
+      border: 1px solid rgba(111,145,171,0.20);
+      background: rgba(255,255,255,0.03);
+      min-width: 0;
+    }
+
+    .pill .label {
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .16em;
+    }
+
+    .pill .value {
+      margin-top: 6px;
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .tone-profit { color: var(--profit) !important; }
+    .tone-warning { color: var(--warning) !important; }
+    .tone-info { color: var(--info) !important; }
+    .tone-loss { color: var(--loss) !important; }
+    .tone-muted { color: var(--text-sec) !important; }
+
+    .flow {
+      border-radius: 16px;
+      padding: 14px;
+      border: 1px solid rgba(111,145,171,0.20);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .flow-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .delta-grid, .overview-grid, .triple-grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .delta-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .overview-grid { grid-template-columns: 1.15fr .85fr; }
+    .triple-grid { grid-template-columns: 1fr; }
+
+    .change-box, .status-box, .event-item, .blocker, .summary-box, .metric-tile {
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--elevated);
+    }
+
+    .change-box {
+      padding: 14px;
+      animation: live-enter .9s ease-out;
+    }
+
+    .metric-tile {
+      padding: 14px;
+    }
+
+    .metric-tile .k {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .16em;
+      color: var(--text-muted);
+    }
+
+    .metric-tile .v {
+      margin-top: 8px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .action-block {
+      display: flex;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .action-box {
+      min-width: 112px;
+      text-align: center;
+      border-radius: 16px;
+      padding: 16px 14px;
+      border: 1px solid rgba(245,158,11,0.22);
+      background: rgba(245,158,11,0.08);
+    }
+
+    .action-box .main {
+      font-size: 30px;
+      font-weight: 900;
+      color: var(--warning);
+      letter-spacing: .18em;
+    }
+
+    .signal-list, .summary-grid, .risk-grid, .event-list, .blocker-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .signal-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 62px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .bar {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(111,145,171,0.16);
+      overflow: hidden;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: 999px;
+    }
+
+    .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .risk-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .status-box, .blocker, .summary-box {
+      padding: 14px;
+    }
+
+    .event-item {
+      position: relative;
+      padding: 16px 16px 16px 18px;
+    }
+
+    .event-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--info);
+    }
+
+    .event-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .event-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .event-detail {
+      margin-top: 8px;
+      color: var(--text-sec);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .pulse-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(20,184,166,0.12);
+      border: 1px solid rgba(20,184,166,0.24);
+      color: var(--teal);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    .table-list {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .table-row {
+      display: grid;
+      grid-template-columns: 76px 70px 56px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+
+    .footer-note {
+      text-align: center;
+      padding: 8px 0 26px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px currentColor; }
+      50% { opacity: .55; box-shadow: 0 0 18px currentColor; }
+    }
+
+    @keyframes live-enter {
+      0% { transform: translateY(4px); opacity: .35; box-shadow: 0 0 0 rgba(59,130,246,0); }
+      40% { opacity: 1; box-shadow: 0 0 28px rgba(59,130,246,0.18); }
+      100% { transform: translateY(0); opacity: 1; box-shadow: 0 0 0 rgba(59,130,246,0); }
+    }
+
+    @media (max-width: 1180px) {
+      .hero-top,
+      .overview-grid,
+      .delta-grid,
+      .flow-row,
+      .summary-grid,
+      .risk-grid,
+      .pill-row.command-pills,
+      .pill-row.top-pills {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .wrap,
+      .header-inner { width: min(100% - 20px, 1520px); }
+      .hero-top,
+      .overview-grid,
+      .delta-grid,
+      .flow-row,
+      .summary-grid,
+      .risk-grid,
+      .pill-row.command-pills,
+      .pill-row.top-pills,
+      .signal-row,
+      .table-row {
+        grid-template-columns: 1fr;
+      }
+      .header-inner,
+      .brand {
+        align-items: start;
+      }
+      .header-inner {
+        flex-direction: column;
+      }
+      .action-block {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-mark mono">CB</div>
+        <div>
+          <div class="eyebrow mono">CryptoBot Platform v0.1.0</div>
+          <h1>Operational Trading Dashboard</h1>
+          <div class="subline">Bot active and cycling. Session synced 6s ago.</div>
+        </div>
+      </div>
+      <div class="badge-wrap">
+        <span class="badge warning mono">Demo Mode</span>
+        <span class="badge profit mono">Running</span>
+        <span class="badge info mono">Uptime 25m</span>
+        <span class="badge muted mono">viewer: admin</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="section">
+      <div class="card hero-card">
+        <div class="card-body">
+          <div class="hero-top">
+            <div>
+              <div class="badge-wrap">
+                <span class="badge warning mono">Demo Mode</span>
+                <span class="badge profit mono">Running</span>
+              </div>
+              <h2>Real-time Bot Command Center</h2>
+              <p class="subline" style="margin-top:10px; max-width: 760px;">
+                Visualização operacional do ciclo atual: mercado, decisão da IA, gates de entrada, risco e execução.
+              </p>
+            </div>
+            <div class="pill-row top-pills">
+              <div class="pill"><div class="label mono">Mid Price</div><div class="value mono">$71,902.22</div></div>
+              <div class="pill"><div class="label mono">Confidence</div><div class="value mono tone-profit">97%</div></div>
+              <div class="pill"><div class="label mono">Exchange</div><div class="value mono tone-info">357ms</div></div>
+              <div class="pill"><div class="label mono">Clock Drift</div><div class="value mono tone-profit">8ms</div></div>
+            </div>
+          </div>
+
+          <div class="pill-row command-pills" style="margin-top:16px;">
+            <div class="pill"><div class="label mono">Action</div><div class="value mono tone-warning">HOLD</div></div>
+            <div class="pill"><div class="label mono">Regime</div><div class="value mono tone-warning">VOLATILE</div></div>
+            <div class="pill"><div class="label mono">Pipeline</div><div class="value mono tone-warning">AI_VETO</div></div>
+            <div class="pill"><div class="label mono">AI Latency</div><div class="value mono tone-warning">4.79s</div></div>
+            <div class="pill"><div class="label mono">RSI</div><div class="value mono tone-loss">4.9</div></div>
+            <div class="pill"><div class="label mono">Volume</div><div class="value mono tone-warning">0.57x</div></div>
+            <div class="pill"><div class="label mono">Exposure</div><div class="value mono tone-muted">$0.00</div></div>
+            <div class="pill"><div class="label mono">Feed Age</div><div class="value mono tone-profit">246ms</div></div>
+          </div>
+
+          <div class="flow-row" style="margin-top:16px;">
+            <div class="flow">
+              <div class="flow-top"><span class="eyebrow mono">1 Market Feed</span><span class="dot" style="color:var(--profit); background:var(--profit);"></span></div>
+              <div class="value mono tone-profit" style="margin-top:10px; font-size:16px;">LIVE</div>
+              <div class="subline" style="margin-top:8px;">Freshness 246ms · mode DEMO</div>
+            </div>
+            <div class="flow">
+              <div class="flow-top"><span class="eyebrow mono">2 AI Assessment</span><span class="dot" style="color:var(--warning); background:var(--warning);"></span></div>
+              <div class="value mono tone-warning" style="margin-top:10px; font-size:16px;">VOLATILE</div>
+              <div class="subline" style="margin-top:8px;">Entry veto triggered due to oversold, momentum collapse and liquidity concerns.</div>
+            </div>
+            <div class="flow">
+              <div class="flow-top"><span class="eyebrow mono">3 Risk Gate</span><span class="dot" style="color:var(--text-sec); background:var(--text-sec);"></span></div>
+              <div class="value mono tone-muted" style="margin-top:10px; font-size:16px;">MONITORING</div>
+              <div class="subline" style="margin-top:8px;">Daily trades 0 · consecutive losses 0</div>
+            </div>
+            <div class="flow">
+              <div class="flow-top"><span class="eyebrow mono">4 Execution</span><span class="dot" style="color:var(--text-sec); background:var(--text-sec);"></span></div>
+              <div class="value mono tone-muted" style="margin-top:10px; font-size:16px;">FLAT</div>
+              <div class="subline" style="margin-top:8px;">No live order in flight during current cycle</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="card">
+        <div class="card-body">
+          <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;">
+            <div>
+              <div class="eyebrow mono" style="color:var(--teal);">Cycle Delta</div>
+              <h3 style="margin-top:6px;">What changed since the last polling cycle</h3>
+            </div>
+            <span class="badge info mono">4 changes</span>
+          </div>
+          <div class="delta-grid" style="margin-top:16px;">
+            <div class="change-box" style="background:rgba(59,130,246,0.08);border-color:rgba(59,130,246,0.22);">
+              <div class="eyebrow mono">Pipeline</div>
+              <div class="value mono tone-info" style="margin-top:10px;">ENTRY_RULES_FAILED -> AI_VETO</div>
+            </div>
+            <div class="change-box" style="background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.22);">
+              <div class="eyebrow mono">Regime</div>
+              <div class="value mono tone-warning" style="margin-top:10px;">BULL_TREND -> VOLATILE</div>
+            </div>
+            <div class="change-box" style="background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.22);">
+              <div class="eyebrow mono">Orders</div>
+              <div class="value mono tone-profit" style="margin-top:10px;">0 -> 0 recent</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section overview-grid">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono">Market Overview</div>
+            <div class="subline">Live assessment context</div>
+          </div>
+          <span class="badge info mono">6s ago</span>
+        </div>
+        <div class="card-body">
+          <div class="summary-grid">
+            <div class="metric-tile"><div class="k mono">Mid</div><div class="v mono">$71,902.22</div></div>
+            <div class="metric-tile"><div class="k mono">RSI</div><div class="v mono tone-loss">4.9</div></div>
+            <div class="metric-tile"><div class="k mono">Spread</div><div class="v mono">5.0 bps</div></div>
+            <div class="metric-tile"><div class="k mono">Volume</div><div class="v mono tone-warning">0.57x</div></div>
+          </div>
+
+          <div class="status-box" style="margin-top:16px; background:linear-gradient(180deg, rgba(245,158,11,0.08), rgba(255,255,255,0.01)); border-color:rgba(245,158,11,0.20);">
+            <div class="eyebrow mono">Current Regime</div>
+            <div class="value mono tone-warning" style="margin-top:8px; font-size:20px;">VOLATILE</div>
+            <div class="subline" style="margin-top:8px;">Momentum collapse with extreme oversold print and negative 5m move.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono">AI Decision Engine</div>
+            <div class="subline">Last assessment 6s ago</div>
+          </div>
+          <span class="badge warning mono">4.79s</span>
+        </div>
+        <div class="card-body">
+          <div class="summary-grid">
+            <div class="metric-tile"><div class="k mono">AI Action</div><div class="v mono tone-warning">HOLD</div></div>
+            <div class="metric-tile"><div class="k mono">Pipeline</div><div class="v mono tone-warning">Stopped at AI</div></div>
+            <div class="metric-tile"><div class="k mono">Confidence</div><div class="v mono tone-profit">97%</div></div>
+            <div class="metric-tile"><div class="k mono">Latency</div><div class="v mono tone-warning">4.79s</div></div>
+          </div>
+
+          <div class="action-block" style="margin-top:16px;">
+            <div class="action-box">
+              <div class="main mono">HOLD</div>
+              <div class="eyebrow mono" style="margin-top:6px;">Decision</div>
+            </div>
+            <div style="flex:1;">
+              <div class="status-box" style="background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.22);">
+                <div class="eyebrow mono">Pipeline Status</div>
+                <div class="value tone-warning" style="margin-top:8px;">AI vetoed entry due to knife-catching risk and low-liquidity context.</div>
+                <div class="subline" style="margin-top:8px;">RSI 4.9, price_change_5m -2.558%, ema_diff_pct -0.4621%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="signal-list" style="margin-top:16px;">
+            <div class="signal-row">
+              <div class="eyebrow mono">Trend</div>
+              <div class="bar"><div class="fill" style="width:24%; background:var(--warning);"></div></div>
+              <div class="mono tone-warning">24%</div>
+            </div>
+            <div class="signal-row">
+              <div class="eyebrow mono">Momentum</div>
+              <div class="bar"><div class="fill" style="width:6%; background:var(--loss);"></div></div>
+              <div class="mono tone-loss">6%</div>
+            </div>
+            <div class="signal-row">
+              <div class="eyebrow mono">Liquidity</div>
+              <div class="bar"><div class="fill" style="width:52%; background:var(--info);"></div></div>
+              <div class="mono tone-info">52%</div>
+            </div>
+            <div class="signal-row">
+              <div class="eyebrow mono">Confidence</div>
+              <div class="bar"><div class="fill" style="width:97%; background:var(--profit);"></div></div>
+              <div class="mono tone-profit">97%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono">Positions & Execution</div>
+            <div class="subline">Execution state and recent order flow</div>
+          </div>
+          <span class="badge muted mono">Flat</span>
+        </div>
+        <div class="card-body">
+          <div class="risk-grid">
+            <div class="metric-tile"><div class="k mono">Execution State</div><div class="v mono tone-muted">Flat</div></div>
+            <div class="metric-tile"><div class="k mono">Latest Order</div><div class="v mono tone-muted">None</div></div>
+            <div class="metric-tile"><div class="k mono">Order Side</div><div class="v mono tone-muted">—</div></div>
+            <div class="metric-tile"><div class="k mono">Last Trade PnL</div><div class="v mono tone-muted">—</div></div>
+          </div>
+
+          <div class="status-box" style="margin-top:16px;">
+            <div class="summary-grid" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+              <div><div class="eyebrow mono">Order Queue</div><div class="subline" style="margin-top:8px;">No order submitted yet</div></div>
+              <div><div class="eyebrow mono">Trade Lifecycle</div><div class="subline" style="margin-top:8px;">Awaiting first completed trade</div></div>
+              <div><div class="eyebrow mono">Live Exposure</div><div class="subline" style="margin-top:8px;">No active exposure</div></div>
+            </div>
+          </div>
+
+          <div class="status-box" style="margin-top:16px;">
+            <div class="value" style="font-size:16px;">Bot is flat — no active exposure</div>
+            <div class="subline" style="margin-top:6px;">The execution engine has not opened any position in the current monitoring window.</div>
+          </div>
+
+          <div class="table-list">
+            <div class="table-row" style="border-top:1px solid var(--border); margin-top:10px;">
+              <div class="eyebrow mono">Time</div>
+              <div class="eyebrow mono">Symbol</div>
+              <div class="eyebrow mono">Side</div>
+              <div class="eyebrow mono">Price · Qty</div>
+              <div class="eyebrow mono">Status</div>
+            </div>
+            <div class="subline">No orders recorded in this demo window.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono" style="color:var(--info);">Live Event Stream</div>
+            <div class="subline">Decisions, blockers, incidents and execution events in one timeline</div>
+          </div>
+          <span class="badge info mono">6 events</span>
+        </div>
+        <div class="card-body event-list">
+          <div class="event-item">
+            <div class="event-head">
+              <div class="event-meta">
+                <span class="badge warning mono">AI</span>
+                <strong>HOLD · VOLATILE</strong>
+                <span class="subline">6s ago</span>
+                <span class="pulse-tag mono"><span class="dot" style="color:var(--teal); background:var(--teal); width:8px; height:8px;"></span>new event</span>
+              </div>
+              <div class="event-meta">
+                <span class="mono tone-warning">AI_VETO</span>
+                <span class="mono" style="color:var(--text-muted);">21:44:02</span>
+              </div>
+            </div>
+            <div class="event-detail">AI blocked the cycle because the market context looked like knife-catching risk: extreme oversold RSI, negative 5m move and weak near-term quality.</div>
+          </div>
+
+          <div class="event-item" style="--bar: var(--info);">
+            <div class="event-head">
+              <div class="event-meta">
+                <span class="badge info mono">AI</span>
+                <strong>HOLD · BULL_TREND</strong>
+                <span class="subline">21s ago</span>
+              </div>
+              <div class="event-meta">
+                <span class="mono tone-info">ENTRY_RULES_FAILED</span>
+                <span class="mono" style="color:var(--text-muted);">21:43:47</span>
+              </div>
+            </div>
+            <div class="event-detail">Entry rules blocked the cycle because `price_change_5m` stayed below the configured confirmation threshold.</div>
+          </div>
+
+          <div class="event-item">
+            <div class="event-head">
+              <div class="event-meta">
+                <span class="badge profit mono">incident</span>
+                <strong>CLOCK_DRIFT resolved</strong>
+                <span class="subline">2m ago</span>
+              </div>
+              <div class="event-meta">
+                <span class="mono tone-profit">RECOVERED</span>
+                <span class="mono" style="color:var(--text-muted);">21:42:10</span>
+              </div>
+            </div>
+            <div class="event-detail">Clock drift returned below the configured threshold and the incident was auto-resolved.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section overview-grid">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono" style="color:var(--warning);">Why No Trade</div>
+            <div class="subline">Persistent blockers in recent cycles</div>
+          </div>
+          <span class="badge warning mono">4 blockers</span>
+        </div>
+        <div class="card-body blocker-list">
+          <div class="blocker" style="background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.22);">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+              <strong>AI veto: knife-catching risk on extreme oversold move</strong>
+              <span class="badge warning mono">6x</span>
+            </div>
+          </div>
+          <div class="blocker" style="background:rgba(59,130,246,0.08); border-color:rgba(59,130,246,0.22);">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+              <strong>C3 price_change_5m confirmation not reached</strong>
+              <span class="badge info mono">4x</span>
+            </div>
+          </div>
+          <div class="blocker" style="background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.22);">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+              <strong>LOW_LIQUIDITY veto from AI assessment</strong>
+              <span class="badge warning mono">3x</span>
+            </div>
+          </div>
+          <div class="blocker" style="background:rgba(239,68,68,0.08); border-color:rgba(239,68,68,0.22);">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+              <strong>Risk denied because of active incident state</strong>
+              <span class="badge loss mono">1x</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono">Risk Control</div>
+            <div class="subline">Budget, posture and pressure indicators</div>
+          </div>
+          <span class="badge profit mono">safe</span>
+        </div>
+        <div class="card-body">
+          <div class="risk-grid">
+            <div class="metric-tile"><div class="k mono">Risk Posture</div><div class="v mono tone-profit">SAFE</div></div>
+            <div class="metric-tile"><div class="k mono">Loss Budget</div><div class="v mono tone-profit">$500.00</div></div>
+            <div class="metric-tile"><div class="k mono">Trades Used</div><div class="v mono tone-info">0/20</div></div>
+            <div class="metric-tile"><div class="k mono">Exposure</div><div class="v mono tone-muted">$0.00</div></div>
+          </div>
+
+          <div class="status-box" style="margin-top:16px;">
+            <div class="value" style="font-size:16px;">No active risk pressure detected</div>
+            <div class="subline" style="margin-top:8px;">The risk engine is healthy, budgets are intact and no protective cap is currently constraining the bot.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow mono">System Health</div>
+            <div class="subline">Infra and service status</div>
+          </div>
+          <span class="badge profit mono">Nominal</span>
+        </div>
+        <div class="card-body">
+          <div class="summary-grid">
+            <div class="summary-box"><div class="eyebrow mono">Exchange</div><div class="value mono tone-profit" style="margin-top:8px;">Healthy · 357ms</div></div>
+            <div class="summary-box"><div class="eyebrow mono">Market Data</div><div class="value mono tone-profit" style="margin-top:8px;">Healthy · 246ms</div></div>
+            <div class="summary-box"><div class="eyebrow mono">Database</div><div class="value mono tone-profit" style="margin-top:8px;">Healthy · 0ms</div></div>
+            <div class="summary-box"><div class="eyebrow mono">Redis</div><div class="value mono tone-profit" style="margin-top:8px;">Healthy · 0ms</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer-note mono">
+      Static visual base extracted from the current CryptoBot dashboard layout.
+    </div>
+  </main>
+</body>
+</html>

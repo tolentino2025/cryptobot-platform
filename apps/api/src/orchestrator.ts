@@ -486,6 +486,10 @@ export class MainOrchestrator {
     }
     // Data is fresh — ensure kill switch clears on recovery
     this.firedKillSwitches.delete('MARKET_DATA_GAP');
+    await this.resolveActiveIncidents(
+      IncidentType.MARKET_DATA_GAP,
+      `Recovered automatically: fresh market data for ${symbol}`,
+    );
 
     // Step 3: Pre-flight risk check
     const t3 = Date.now();
@@ -567,6 +571,7 @@ export class MainOrchestrator {
     //   - HOLD:  everything else
 
     let finalDecision: ModelDecision | null = null;
+    let failedEntryConditions: string[] = [];
 
     // ── Step 7a: Deterministic SL/TP override ──
     // Fires before AI to protect positions even when Claude is slow or unavailable.
@@ -645,12 +650,12 @@ export class MainOrchestrator {
         context.features,
         snapshot.ticker,
         {
-          takeProfitBps: this.strategyConfig.takeProfitBps,
-          stopLossBps: this.strategyConfig.stopLossBps,
-          timeoutSec: this.strategyConfig.timeoutSeconds,
+          ...DeterministicEntryEngine.fromStrategyConfig(this.strategyConfig),
           // sizeQuote: not in StrategyConfig — DeterministicEntryEngine uses its own default (50 USDT)
         },
       );
+
+      failedEntryConditions = entryCandidate.failedConditions;
 
       if (entryCandidate.shouldEnter) {
         finalDecision = {
@@ -685,15 +690,42 @@ export class MainOrchestrator {
 
     // Step 7b: If HOLD (no action), log trace and return
     if (!finalDecision) {
+      const pipelineStageStoppedAt = assessmentRecord.assessment.entry_veto
+        ? 'AI_VETO'
+        : failedEntryConditions.length > 0
+          ? 'ENTRY_RULES_FAILED'
+          : hasPosition
+            ? 'NO_EXIT_SIGNAL'
+            : 'NO_ACTION';
       const holdReason = assessmentRecord.assessment.entry_veto
         ? `AI veto: ${assessmentRecord.assessment.entry_veto_reason}`
-        : 'No entry conditions met / no exit signal';
+        : failedEntryConditions.length > 0
+          ? `Entry blocked: ${failedEntryConditions.join('; ')}`
+          : 'No entry conditions met / no exit signal';
+
+      try {
+        await this.db.modelDecision.update({
+          where: { id: assessmentRecord.id },
+          data: {
+            decision: {
+              ...(assessmentRecord.assessment as unknown as Record<string, unknown>),
+              hold_reason: holdReason,
+              pipeline_stage_stopped_at: pipelineStageStoppedAt,
+              failed_entry_conditions: failedEntryConditions,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      } catch (error) {
+        logger.warn({ symbol, assessmentId: assessmentRecord.id, error }, 'Failed to persist HOLD diagnostics');
+      }
 
       logger.debug(
         {
           symbol,
           regime: assessmentRecord.assessment.regime,
           entry_veto: assessmentRecord.assessment.entry_veto,
+          pipelineStageStoppedAt,
+          failedEntryConditions,
           riskStateMs,
           featuresMs,
           claudeMs,
@@ -894,6 +926,22 @@ export class MainOrchestrator {
     await this.notifications.warning(title, description);
   }
 
+  /** Resolve stale active incidents once the underlying condition has recovered. */
+  private async resolveActiveIncidents(type: IncidentType, resolutionNotes: string): Promise<void> {
+    const result = await this.db.incident.updateMany({
+      where: { type, isActive: true },
+      data: {
+        isActive: false,
+        resolvedAt: new Date(),
+        resolutionNotes,
+      },
+    });
+
+    if (result.count > 0) {
+      logger.info({ type, count: result.count }, 'Resolved recovered incidents');
+    }
+  }
+
   /** Load configuration from database */
   private async loadConfig(): Promise<void> {
     const riskLimits = await this.db.riskLimits.findFirst({ where: { isActive: true } });
@@ -1047,6 +1095,7 @@ export class MainOrchestrator {
   private startClockDriftMonitor(): void {
     if (this.clockDriftInterval) return;
     this.clockDriftInterval = setInterval(() => this.checkClockDrift(), 30_000);
+    void this.checkClockDrift();
     logger.info('Clock drift monitor started');
   }
 
@@ -1095,6 +1144,10 @@ export class MainOrchestrator {
         // Drift recovered — clear flags
         this.clockDriftWarningFired = false;
         this.firedKillSwitches.delete('CLOCK_DRIFT');
+        await this.resolveActiveIncidents(
+          IncidentType.CLOCK_DRIFT,
+          `Recovered automatically: clock drift back within ${CLOCK_DRIFT_WARNING_MS}ms`,
+        );
       }
     } catch (error) {
       logger.warn({ error }, 'Clock drift check failed — could not reach exchange');
