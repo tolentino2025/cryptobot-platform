@@ -220,6 +220,10 @@ export class ClaudeDecisionEngine implements IDecisionEngine {
       hasPosition: context.position.hasPosition,
       dailyPnl: context.account.dailyPnl,
       dailyTrades: context.account.dailyTradeCount,
+      phaseA: context.phaseA ? {
+        marketIntelligence: context.phaseA.marketIntelligence,
+        technicalAnalysis: context.phaseA.technicalAnalysis,
+      } : null,
     };
 
     let dbId = requestId;

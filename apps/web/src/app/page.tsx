@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/fmt';
 
-import { DS, Card, DataPill, FlowStep, Badge } from '@/components/v2/ui';
+import { DS, Card, DataPill, Badge } from '@/components/v2/ui';
 import { DashboardHeader }    from '@/components/v2/DashboardHeader';
 import { MarketOverviewCard } from '@/components/v2/MarketOverviewCard';
 import { AIDecisionCard }     from '@/components/v2/AIDecisionCard';
@@ -191,6 +191,141 @@ function computeFreshEventIds(prev: DashboardData | null, next: DashboardData): 
     ...next.recentIncidents.map((item, index) => makeEventKey('incident', item, index)),
     ...next.recentLifecycles.map((item, index) => makeEventKey('trade', item, index)),
   ].filter((key) => !previousKeys.has(key)).slice(0, 8);
+}
+
+function EnvironmentBannerCard({
+  system,
+  healthData,
+}: {
+  system: DashboardData['system'];
+  healthData: Record<string, unknown> | null;
+}) {
+  const checks = healthData?.checks as Record<string, unknown> | null ?? null;
+  const healthStatus = asStr(healthData?.status) ?? 'unknown';
+  const modeCfg = system.mode === 'LIVE'
+    ? {
+        label: 'LIVE',
+        title: 'LIVE - operando com dinheiro real',
+        description: 'Ambiente de produção. Exige máxima atenção operacional.',
+        tone: DS.loss,
+        bg: DS.lossBg,
+        border: DS.lossBorder,
+      }
+    : system.mode === 'DEMO'
+      ? {
+          label: 'DEMO',
+          title: 'Demonstração supervisionada',
+          description: 'Dados reais e infraestrutura ativa, com monitoramento operacional constante.',
+          tone: DS.warning,
+          bg: DS.warningBg,
+          border: DS.warningBorder,
+        }
+      : {
+          label: 'SIM',
+          title: 'Simulação sem risco real',
+          description: 'Ciclos, decisões e risco em validação sem execução financeira real.',
+          tone: DS.info,
+          bg: DS.infoBg,
+          border: DS.infoBorder,
+        };
+
+  return (
+    <Card accent={modeCfg.tone}>
+      <div className="p-4 md:p-5 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between" style={{ background: modeCfg.bg, border: `1px solid ${modeCfg.border}` }}>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge label={modeCfg.label} color={modeCfg.tone} size="xs" />
+            <Badge label={system.state} color={system.state === 'RUNNING' ? DS.profit : DS.warning} size="xs" />
+            <Badge label={`Health ${healthStatus.toUpperCase()}`} color={healthStatus === 'ok' ? DS.profit : DS.warning} size="xs" />
+          </div>
+          <div>
+            <div className="text-lg font-bold" style={{ color: modeCfg.tone, fontFamily: DS.font }}>
+              {modeCfg.title}
+            </div>
+            <p className="text-sm mt-1" style={{ color: DS.textSec }}>
+              {modeCfg.description}
+            </p>
+            {system.haltReason && (
+              <p className="text-sm mt-2" style={{ color: DS.loss }}>
+                Halt reason: {system.haltReason}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 xl:min-w-[520px]">
+          <DataPill
+            label="Exchange"
+            value={asStr((checks?.exchange as Record<string, unknown> | null)?.status)?.toUpperCase() ?? '—'}
+            tone={asStr((checks?.exchange as Record<string, unknown> | null)?.status) === 'healthy' ? DS.profit : DS.warning}
+          />
+          <DataPill
+            label="Market Data"
+            value={asStr((checks?.marketData as Record<string, unknown> | null)?.status)?.toUpperCase() ?? '—'}
+            tone={asStr((checks?.marketData as Record<string, unknown> | null)?.status) === 'healthy' ? DS.profit : DS.warning}
+          />
+          <DataPill
+            label="Database"
+            value={asStr((checks?.database as Record<string, unknown> | null)?.status)?.toUpperCase() ?? '—'}
+            tone={asStr((checks?.database as Record<string, unknown> | null)?.status) === 'healthy' ? DS.profit : DS.warning}
+          />
+          <DataPill
+            label="Redis"
+            value={asStr((checks?.redis as Record<string, unknown> | null)?.status)?.toUpperCase() ?? '—'}
+            tone={asStr((checks?.redis as Record<string, unknown> | null)?.status) === 'healthy' ? DS.profit : DS.warning}
+          />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function QuickStatsGrid({
+  system,
+  portfolio,
+  lastUpdated,
+}: {
+  system: DashboardData['system'];
+  portfolio: DashboardData['portfolio'];
+  lastUpdated: Date | null;
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      {[
+        {
+          label: 'Estado',
+          value: system.state,
+          tone: system.state === 'RUNNING' ? DS.profit : DS.warning,
+        },
+        {
+          label: 'Saldo disponível',
+          value: fmt.usd(portfolio.availableBalance),
+          tone: DS.info,
+        },
+        {
+          label: 'P&L diário',
+          value: fmt.usd(portfolio.dailyPnl),
+          tone: portfolio.dailyPnl > 0 ? DS.profit : portfolio.dailyPnl < 0 ? DS.loss : DS.textSec,
+        },
+        {
+          label: 'Última atualização',
+          value: lastUpdated ? lastUpdated.toLocaleTimeString('pt-BR') : '—',
+          tone: DS.text,
+        },
+      ].map((item) => (
+        <Card key={item.label} accent={item.tone}>
+          <div className="p-4">
+            <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: DS.textMuted }}>
+              {item.label}
+            </div>
+            <div className="text-xl font-bold mt-2" style={{ color: item.tone, fontFamily: DS.mono }}>
+              {item.value}
+            </div>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
 }
 
 function CycleDeltaBar({ changes }: { changes: CycleChange[] }) {
@@ -494,91 +629,6 @@ function EventStream({
         </div>
       </div>
     </Card>
-  );
-}
-
-function LiveOpsStrip({
-  system,
-  portfolio,
-  decision,
-  healthData,
-}: {
-  system: DashboardData['system'];
-  portfolio: DashboardData['portfolio'];
-  decision: Record<string, unknown> | null;
-  healthData: Record<string, unknown> | null;
-}) {
-  const summary = decision?.inputSummary as Record<string, unknown> | null ?? null;
-  const stage = asStr(decision?.pipelineStageStoppedAt);
-  const stageDetail = asStr(decision?.holdReason);
-  const latencyMs = asNum(decision?.latencyMs);
-  const confidence = asNum(decision?.confidence);
-  const regime = asStr(decision?.regime) ?? 'UNKNOWN';
-  const action = asStr(decision?.action) ?? 'HOLD';
-  const checks = healthData?.checks as Record<string, unknown> | null ?? null;
-  const exchange = checks?.exchange as Record<string, unknown> | null ?? null;
-  const marketData = checks?.marketData as Record<string, unknown> | null ?? null;
-  const clock = checks?.clockDrift as Record<string, unknown> | null ?? null;
-  const marketSymbols = marketData?.symbols as Record<string, Record<string, unknown>> | null ?? null;
-  const ageMs = marketSymbols ? Math.max(...Object.values(marketSymbols).map((item) => asNum(item.ageMs) ?? 0)) : null;
-  const mid = asNum(summary?.mid);
-  const rsi = asNum(summary?.rsi);
-  const volumeRatio = asNum(summary?.volumeRatio);
-
-  return (
-    <section className="space-y-4">
-      <Card
-        accent={system.state === 'RUNNING' ? DS.profit : DS.warning}
-        className="overflow-visible"
-        style={{
-          background: `linear-gradient(135deg, ${DS.panel} 0%, rgba(6, 16, 24, 0.96) 52%, rgba(11, 34, 46, 0.96) 100%)`,
-        }}
-      >
-        <div className="p-5 md:p-6 space-y-5">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge label={`${system.mode} MODE`} color={system.mode === 'DEMO' ? DS.warning : DS.info} size="xs" />
-                <Badge label={system.state} color={system.state === 'RUNNING' ? DS.profit : DS.warning} size="xs" />
-              </div>
-              <div className="space-y-1">
-                <h1 className="text-2xl md:text-4xl font-black tracking-tight" style={{ color: DS.text, fontFamily: DS.font }}>
-                  Real-time Bot Command Center
-                </h1>
-                <p className="text-sm md:text-base max-w-3xl" style={{ color: DS.textSec }}>
-                  Visualizacao operacional do ciclo atual: mercado, decisao da IA, gates de entrada, risco e execucao.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 xl:w-[560px]">
-              <DataPill label="Mid Price" value={mid != null ? `$${mid.toFixed(2)}` : '—'} tone={DS.text} />
-              <DataPill label="Confidence" value={confidence != null ? `${Math.round(confidence * 100)}%` : '—'} tone={confidence != null && confidence >= 0.7 ? DS.profit : DS.warning} />
-              <DataPill label="Exchange" value={asNum(exchange?.latencyMs) != null ? `${Math.round(asNum(exchange?.latencyMs) ?? 0)}ms` : '—'} tone={DS.info} />
-              <DataPill label="Clock Drift" value={asNum(clock?.driftMs) != null ? `${Math.round(asNum(clock?.driftMs) ?? 0)}ms` : '—'} tone={(asNum(clock?.driftMs) ?? 0) > 300 ? DS.warning : DS.profit} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-            <DataPill label="Action" value={action} tone={action === 'HOLD' ? DS.warning : DS.profit} />
-            <DataPill label="Regime" value={regime} tone={regime.includes('BEAR') || regime.includes('LOW') ? DS.loss : regime.includes('RANGE') ? DS.warning : DS.profit} />
-            <DataPill label="Pipeline" value={stage ?? 'ACTIVE'} tone={stageTone(stage)} />
-            <DataPill label="AI Latency" value={latencyMs != null ? `${(latencyMs / 1000).toFixed(2)}s` : '—'} tone={latencyMs != null && latencyMs > 4000 ? DS.warning : DS.profit} />
-            <DataPill label="RSI" value={rsi != null ? rsi.toFixed(1) : '—'} tone={rsi != null && rsi < 20 ? DS.loss : rsi != null && rsi > 68 ? DS.warning : DS.text} />
-            <DataPill label="Volume" value={volumeRatio != null ? `${volumeRatio.toFixed(2)}x` : '—'} tone={volumeRatio != null && volumeRatio < 0.3 ? DS.loss : volumeRatio != null && volumeRatio < 1 ? DS.warning : DS.profit} />
-            <DataPill label="Exposure" value={`$${portfolio.totalExposure.toFixed(2)}`} tone={portfolio.totalExposure > 0 ? DS.info : DS.textSec} />
-            <DataPill label="Feed Age" value={ageMs != null ? `${Math.round(ageMs)}ms` : '—'} tone={ageMs != null && ageMs > 2000 ? DS.warning : DS.profit} />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            <FlowStep label="1 Market Feed" state={ageMs != null && ageMs < 2000 ? 'LIVE' : 'STALE'} detail={`Freshness ${ageMs != null ? `${Math.round(ageMs)}ms` : 'unknown'} · mode ${system.mode}`} tone={ageMs != null && ageMs < 2000 ? DS.profit : DS.warning} />
-            <FlowStep label="2 AI Assessment" state={regime} detail={stage === 'AI_VETO' ? stageDetail ?? 'Entry veto triggered' : 'Assessment completed and stored'} tone={stage === 'AI_VETO' ? DS.warning : DS.info} />
-            <FlowStep label="3 Risk Gate" state={stage === 'ENTRY_RULES_FAILED' ? 'SKIPPED' : 'MONITORING'} detail={stage === 'ENTRY_RULES_FAILED' ? stageDetail ?? 'Entry rules blocked before risk review' : `Daily trades ${portfolio.dailyTradeCount} · consec losses ${portfolio.consecutiveLosses}`} tone={stage === 'ENTRY_RULES_FAILED' ? DS.info : DS.profit} />
-            <FlowStep label="4 Execution" state={portfolio.openPositions.length > 0 ? 'POSITION OPEN' : 'FLAT'} detail={portfolio.openPositions.length > 0 ? 'Execution active with live exposure' : 'No live order in flight during current cycle'} tone={portfolio.openPositions.length > 0 ? DS.profit : DS.textSec} />
-          </div>
-        </div>
-      </Card>
-    </section>
   );
 }
 
@@ -902,38 +952,26 @@ export default function DashboardPage() {
       />
 
       {/* ── Scrollable content ── */}
-      <main className="relative flex-1 px-4 md:px-6 py-5 md:py-6 max-w-[1520px] mx-auto w-full space-y-5">
-        <LiveOpsStrip
+      <main className="relative flex-1 px-4 md:px-6 py-5 md:py-6 max-w-[1520px] mx-auto w-full space-y-6">
+        <EnvironmentBannerCard
+          system={system}
+          healthData={healthData}
+        />
+
+        <QuickStatsGrid
           system={system}
           portfolio={portfolio}
-          decision={recentDecisions[0] ?? null}
-          healthData={healthData}
+          lastUpdated={lastUpdated}
         />
 
         <CycleDeltaBar changes={cycleChanges} />
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5 items-start">
-          <MarketOverviewCard latestDecision={recentDecisions[0] ?? null} />
+        <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-5 items-start">
           <AIDecisionCard decisions={recentDecisions} />
+          <MarketOverviewCard latestDecision={recentDecisions[0] ?? null} />
         </div>
 
-        <PositionStatusCard
-          openPositions={portfolio.openPositions}
-          orders={recentOrders}
-          lifecycles={recentLifecycles}
-          activeTab={execTab}
-          setTab={setExecTab}
-        />
-
-        <EventStream
-          decisions={recentDecisions}
-          orders={recentOrders}
-          incidents={recentIncidents}
-          lifecycles={recentLifecycles}
-          freshIds={freshEventIds}
-        />
-
-        <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-5">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
           <WhyNoTradeCard decisions={recentDecisions} />
           <RiskControlCard
             portfolio={{
@@ -943,17 +981,35 @@ export default function DashboardPage() {
             }}
             riskLimits={riskLimits}
           />
+        </div>
+
+        <EventStream
+          decisions={recentDecisions}
+          orders={recentOrders}
+          incidents={recentIncidents}
+          lifecycles={recentLifecycles}
+          freshIds={freshEventIds}
+        />
+
+        <PositionStatusCard
+          openPositions={portfolio.openPositions}
+          orders={recentOrders}
+          lifecycles={recentLifecycles}
+          activeTab={execTab}
+          setTab={setExecTab}
+        />
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
           <PerformanceCard
             portfolio={portfolio}
             lifecycles={recentLifecycles}
           />
+          <SystemHealthCard
+            health={healthData}
+            system={system}
+            incidents={recentIncidents}
+          />
         </div>
-
-        <SystemHealthCard
-          health={healthData}
-          system={system}
-          incidents={recentIncidents}
-        />
 
         {/* Footer */}
         <p

@@ -151,6 +151,25 @@ export function buildUserMessage(ctx: DecisionContext): string {
       min_volume_ratio: ctx.strategyHints.minVolumeRatio,
       min_book_imbalance: ctx.strategyHints.minBookImbalance,
     },
+    phase_a: ctx.phaseA ? {
+      market_intelligence: {
+        sentiment: ctx.phaseA.marketIntelligence.sentiment,
+        volatility_classification: ctx.phaseA.marketIntelligence.volatilityClassification,
+        liquidity_state: ctx.phaseA.marketIntelligence.liquidityState,
+        macro_bias: ctx.phaseA.marketIntelligence.macroBias,
+        summary: ctx.phaseA.marketIntelligence.summary,
+      },
+      technical_analysis: {
+        trend_direction: ctx.phaseA.technicalAnalysis.trendDirection,
+        momentum_state: ctx.phaseA.technicalAnalysis.momentumState,
+        setup_quality: ctx.phaseA.technicalAnalysis.setupQuality,
+        key_levels: {
+          support: round(ctx.phaseA.technicalAnalysis.keyLevels.support, 2),
+          resistance: round(ctx.phaseA.technicalAnalysis.keyLevels.resistance, 2),
+        },
+        summary: ctx.phaseA.technicalAnalysis.summary,
+      },
+    } : undefined,
   });
 }
 

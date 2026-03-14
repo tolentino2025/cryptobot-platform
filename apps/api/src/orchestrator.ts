@@ -32,7 +32,7 @@ import {
   type StrategyConfig,
 } from '@cryptobot/shared-types';
 import { MarketDataService } from '@cryptobot/market-data';
-import { FeatureEngine } from '@cryptobot/features';
+import { FeatureEngine, PhaseAAnalysisService } from '@cryptobot/features';
 import {
   ClaudeDecisionEngine,
   DeterministicEntryEngine,
@@ -95,6 +95,7 @@ export class MainOrchestrator {
   // Services
   private marketData: MarketDataService;
   private featureEngine: FeatureEngine;
+  private phaseAAnalysis: PhaseAAnalysisService;
   private decisionEngine: ClaudeDecisionEngine;
   private deterministicEntry: DeterministicEntryEngine;
   private riskEngine: RiskEngine;
@@ -123,6 +124,7 @@ export class MainOrchestrator {
     // Initialize services
     this.marketData = new MarketDataService();
     this.featureEngine = new FeatureEngine();
+    this.phaseAAnalysis = new PhaseAAnalysisService();
     this.decisionEngine = new ClaudeDecisionEngine(decisionEngineConfig, db);
     this.deterministicEntry = new DeterministicEntryEngine();
     this.riskEngine = new RiskEngine();
@@ -528,9 +530,14 @@ export class MainOrchestrator {
       lastTradeResult: null as 'WIN' | 'LOSS' | null,
     };
 
-    const context = this.featureEngine.computeContext(
+    const baseContext = this.featureEngine.computeContext(
       snapshot, positionContext, accountContext, this.strategyConfig,
     );
+    const phaseAReports = await this.phaseAAnalysis.analyze(snapshot, baseContext.features);
+    const context = {
+      ...baseContext,
+      phaseA: phaseAReports,
+    };
     const featuresMs = Date.now() - t4;
 
     // Step 5: Update mark-to-market (fire and forget — non-critical path)
@@ -555,6 +562,8 @@ export class MainOrchestrator {
         should_exit: assessmentRecord.assessment.should_exit,
         exit_reason: assessmentRecord.assessment.exit_reason,
         confidence: assessmentRecord.assessment.confidence,
+        market_intelligence: phaseAReports.marketIntelligence.summary,
+        technical_analysis: phaseAReports.technicalAnalysis.summary,
         isFallback: assessmentRecord.isFallback,
         latencyMs: assessmentRecord.latencyMs,
       },

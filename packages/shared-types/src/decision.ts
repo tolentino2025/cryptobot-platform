@@ -45,6 +45,30 @@ export interface AccountContext {
   lastTradeResult: 'WIN' | 'LOSS' | null;
 }
 
+export interface MarketIntelligenceReport {
+  sentiment: 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL';
+  volatilityClassification: 'CALM' | 'ELEVATED' | 'EXTREME';
+  liquidityState: 'HEALTHY' | 'THIN' | 'STRESSED';
+  macroBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  summary: string;
+}
+
+export interface TechnicalAnalysisReport {
+  trendDirection: 'UP' | 'DOWN' | 'SIDEWAYS';
+  momentumState: 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL';
+  setupQuality: 'HIGH' | 'MEDIUM' | 'LOW';
+  keyLevels: {
+    support: number;
+    resistance: number;
+  };
+  summary: string;
+}
+
+export interface PhaseAReports {
+  marketIntelligence: MarketIntelligenceReport;
+  technicalAnalysis: TechnicalAnalysisReport;
+}
+
 /** Full context sent to Claude Decision Engine */
 export interface DecisionContext {
   symbol: string;
@@ -68,6 +92,7 @@ export interface DecisionContext {
     minVolumeRatio: number;
     minBookImbalance: number;
   };
+  phaseA?: PhaseAReports;
 }
 
 // ── Model Decision (received FROM Claude) ───────────────────
